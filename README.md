@@ -19,6 +19,12 @@
    - [Preprocessing Pipeline Details](#preprocessing-pipeline-details)
    - [Cost Estimation for Document Processing](#cost-estimation-for-document-processing)
    - [Troubleshooting Document Processing](#troubleshooting-document-processing)
+- [Moving Services to an Existing Resource Group](#moving-services-to-an-existing-resource-group)
+   - [Prerequisites and Planning](#prerequisites-and-planning)
+   - [Resource Move Process](#resource-move-process)
+   - [Post-Move Configuration Updates](#post-move-configuration-updates)
+   - [Validation and Testing](#validation-and-testing)
+   - [Troubleshooting Resource Moves](#troubleshooting-resource-moves)
 - [Azure Services Used for Deployment](#azure-services-used-for-deployment)
    - [Role Mapping for the Application](#role-mapping-for-the-application)
 - [End-to-end app diagram](#end-to-end-app-diagram)
@@ -566,6 +572,473 @@ az consumption budget create \
 ```
 
 ---
+
+## Moving Services to an Existing Resource Group
+
+This section provides detailed instructions for moving all Azure services created by the multimodal RAG application to an existing resource group. This is commonly needed for organizational consolidation or compliance requirements.
+
+### Prerequisites and Planning
+
+#### 1. Resource Inventory Assessment
+
+First, identify all resources created by the deployment:
+
+```bash
+# List all resources in the current resource group
+az resource list --resource-group <current-rg-name> --output table
+
+# Get detailed information about each resource
+az resource list --resource-group <current-rg-name> --query '[].{Name:name, Type:type, Location:location}' --output table
+```
+
+**Typical Resources Created:**
+- Azure AI Search service (`Microsoft.Search/searchServices`)
+- Cognitive Services account (`Microsoft.CognitiveServices/accounts`)
+- Storage account (`Microsoft.Storage/storageAccounts`)
+- App Service plan (`Microsoft.Web/serverfarms`)
+- App Service (`Microsoft.Web/sites`)
+- Azure Machine Learning workspace (`Microsoft.MachineLearningServices/workspaces`) - if using Prompt Flow
+- Role assignments (`Microsoft.Authorization/roleAssignments`)
+
+#### 2. Move Compatibility Check
+
+Not all resources can be moved between resource groups. Check compatibility:
+
+```bash
+# Check if resources support move operations
+az resource list --resource-group <current-rg-name> --query '[].{Name:name, Type:type}' | \
+while read line; do
+    echo "Checking move support for: $line"
+done
+```
+
+**Resources That CAN Be Moved:**
+- ✅ Azure AI Search service
+- ✅ Cognitive Services account
+- ✅ Storage account
+- ✅ App Service and App Service Plan
+- ✅ Azure Machine Learning workspace
+
+**Resources That CANNOT Be Moved:**
+- ❌ Role assignments (must be recreated)
+- ❌ Some Cohere serverless deployments (region-dependent)
+
+#### 3. Prerequisites Checklist
+
+Before starting the move:
+
+**Required Permissions:**
+```bash
+# Verify you have the necessary permissions
+az role assignment list --assignee $(az ad signed-in-user show --query id -o tsv) \
+    --query '[?roleDefinitionName==`Owner` || roleDefinitionName==`Contributor`]' \
+    --output table
+```
+
+**Required Roles:**
+- **Contributor** or **Owner** on both source and destination resource groups
+- **User Access Administrator** for recreating role assignments
+
+**Pre-Move Validation:**
+```bash
+# Verify target resource group exists
+az group show --name <target-rg-name>
+
+# Check target resource group location compatibility
+az group show --name <target-rg-name> --query location -o tsv
+az group show --name <current-rg-name> --query location -o tsv
+```
+
+#### 4. Backup and Documentation
+
+**Environment Backup:**
+```bash
+# Export current azd environment
+azd env get-values > backup-env-$(date +%Y%m%d).json
+
+# Backup current configuration
+cp ~/.azure/<environment-name>/.env backup-env-file-$(date +%Y%m%d).env
+
+# Document current resource configuration
+az resource list --resource-group <current-rg-name> --output json > backup-resources-$(date +%Y%m%d).json
+```
+
+### Resource Move Process
+
+#### Phase 1: Prepare for Move (Estimated time: 15-30 minutes)
+
+**1. Stop Application Services:**
+```bash
+# Stop the App Service to prevent connections during move
+az webapp stop --name <app-name> --resource-group <current-rg-name>
+
+# Verify app is stopped
+az webapp show --name <app-name> --resource-group <current-rg-name> --query state
+```
+
+**2. Create Resource Move Validation:**
+```bash
+# Get resource IDs for move validation
+SEARCH_SERVICE_ID=$(az search service show --name <search-service-name> --resource-group <current-rg-name> --query id -o tsv)
+STORAGE_ACCOUNT_ID=$(az storage account show --name <storage-account-name> --resource-group <current-rg-name> --query id -o tsv)
+COGNITIVE_SERVICES_ID=$(az cognitiveservices account show --name <cognitive-services-name> --resource-group <current-rg-name> --query id -o tsv)
+APP_SERVICE_ID=$(az webapp show --name <app-name> --resource-group <current-rg-name> --query id -o tsv)
+APP_SERVICE_PLAN_ID=$(az appservice plan show --name <app-service-plan-name> --resource-group <current-rg-name> --query id -o tsv)
+
+# Create array of resource IDs
+RESOURCE_IDS=($SEARCH_SERVICE_ID $STORAGE_ACCOUNT_ID $COGNITIVE_SERVICES_ID $APP_SERVICE_ID $APP_SERVICE_PLAN_ID)
+```
+
+**3. Validate Move Operation:**
+```bash
+# Create validation payload
+cat > move-validation.json << EOF
+{
+  "resources": [
+    "$SEARCH_SERVICE_ID",
+    "$STORAGE_ACCOUNT_ID", 
+    "$COGNITIVE_SERVICES_ID",
+    "$APP_SERVICE_ID",
+    "$APP_SERVICE_PLAN_ID"
+  ],
+  "targetResourceGroup": "/subscriptions/$(az account show --query id -o tsv)/resourceGroups/<target-rg-name>"
+}
+EOF
+
+# Validate the move
+az rest --method post \
+    --url "https://management.azure.com/subscriptions/$(az account show --query id -o tsv)/resourceGroups/<current-rg-name>/validateMoveResources?api-version=2021-04-01" \
+    --body @move-validation.json
+```
+
+#### Phase 2: Execute Resource Move (Estimated time: 30-60 minutes)
+
+**1. Move Resources (Sequential Approach):**
+
+```bash
+# Move App Service Plan first (dependency for App Service)
+echo "Moving App Service Plan..."
+az resource move --destination-group <target-rg-name> --ids $APP_SERVICE_PLAN_ID
+
+# Wait for completion and verify
+az resource show --ids $APP_SERVICE_PLAN_ID --query resourceGroup
+
+# Move App Service
+echo "Moving App Service..."
+az resource move --destination-group <target-rg-name> --ids $APP_SERVICE_ID
+
+# Move Storage Account
+echo "Moving Storage Account..."
+az resource move --destination-group <target-rg-name> --ids $STORAGE_ACCOUNT_ID
+
+# Move Cognitive Services
+echo "Moving Cognitive Services..."
+az resource move --destination-group <target-rg-name> --ids $COGNITIVE_SERVICES_ID
+
+# Move AI Search Service
+echo "Moving AI Search Service..."
+az resource move --destination-group <target-rg-name> --ids $SEARCH_SERVICE_ID
+```
+
+**2. Monitor Move Progress:**
+```bash
+# Check move operation status
+az resource list --resource-group <target-rg-name> --output table
+
+# Verify resources are no longer in source group
+az resource list --resource-group <current-rg-name> --output table
+```
+
+**3. Move Azure ML Workspace (if applicable):**
+```bash
+# If using Prompt Flow, move ML workspace
+ML_WORKSPACE_ID=$(az ml workspace show --name <ml-workspace-name> --resource-group <current-rg-name> --query id -o tsv)
+az resource move --destination-group <target-rg-name> --ids $ML_WORKSPACE_ID
+```
+
+#### Phase 3: Recreate Role Assignments (Estimated time: 10-15 minutes)
+
+Role assignments cannot be moved and must be recreated:
+
+**1. Document Current Role Assignments:**
+```bash
+# List current role assignments
+az role assignment list --resource-group <current-rg-name> --output table > role-assignments-backup.txt
+```
+
+**2. Recreate Role Assignments in Target Resource Group:**
+```bash
+# Get your user object ID
+USER_OBJECT_ID=$(az ad signed-in-user show --query id -o tsv)
+
+# Storage Blob Data Contributor
+az role assignment create \
+    --assignee $USER_OBJECT_ID \
+    --role "ba92f5b4-2d11-453d-a403-e96b0029c9fe" \
+    --resource-group <target-rg-name>
+
+# Cognitive Services User  
+az role assignment create \
+    --assignee $USER_OBJECT_ID \
+    --role "a97b65f3-24c7-4388-baec-2e87135dc908" \
+    --resource-group <target-rg-name>
+
+# Search Index Data Contributor
+az role assignment create \
+    --assignee $USER_OBJECT_ID \
+    --role "8ebe5a00-799e-43f5-93ac-243d3dce84a7" \
+    --resource-group <target-rg-name>
+
+# Search Service Contributor
+az role assignment create \
+    --assignee $USER_OBJECT_ID \
+    --role "7ca78c08-252a-4471-8644-bb5ff32d4ba0" \
+    --resource-group <target-rg-name>
+
+# Azure AI Developer
+az role assignment create \
+    --assignee $USER_OBJECT_ID \
+    --role "64702f94-c441-49e6-a78b-ef80e0188fee" \
+    --resource-group <target-rg-name>
+```
+
+### Post-Move Configuration Updates
+
+#### 1. Update Azure Developer CLI Environment
+
+**Update azd environment configuration:**
+```bash
+# Update the azd environment to point to new resource group
+azd env set AZURE_RESOURCE_GROUP <target-rg-name>
+
+# Refresh azd environment
+azd env refresh
+
+# Verify configuration
+azd env get-values
+```
+
+#### 2. Update Application Configuration
+
+**Update App Service configuration if needed:**
+```bash
+# Get current app settings
+az webapp config appsettings list --name <app-name> --resource-group <target-rg-name>
+
+# Update any resource group references in app settings (if any)
+# Most settings should remain valid as they reference resource names, not resource groups
+```
+
+#### 3. Update Local Environment Files
+
+**Update local .env files:**
+```bash
+# Update your local environment file if it contains resource group references
+sed -i 's/<current-rg-name>/<target-rg-name>/g' ~/.azure/<environment-name>/.env
+
+# Verify the changes
+cat ~/.azure/<environment-name>/.env | grep RESOURCE_GROUP
+```
+
+#### 4. Clean Up Source Resource Group
+
+**After successful move and testing:**
+```bash
+# List remaining resources in source group
+az resource list --resource-group <current-rg-name> --output table
+
+# If empty and no longer needed, delete the source resource group
+az group delete --name <current-rg-name> --yes --no-wait
+```
+
+### Validation and Testing
+
+#### 1. Service Connectivity Validation
+
+**Test each service individually:**
+```bash
+# Test Storage Account
+az storage container list --account-name <storage-account-name> --auth-mode login
+
+# Test AI Search Service  
+az search service show --name <search-service-name> --resource-group <target-rg-name>
+
+# Test Cognitive Services
+az cognitiveservices account show --name <cognitive-services-name> --resource-group <target-rg-name>
+```
+
+#### 2. Application Functionality Testing
+
+**Start and test the application:**
+```bash
+# Start the App Service
+az webapp start --name <app-name> --resource-group <target-rg-name>
+
+# Test the application locally
+src/start.sh  # or src/start.ps1 on Windows
+
+# Verify the app opens at http://localhost:5000
+```
+
+**Test Core Functionality:**
+1. **Search Functionality**: Submit a test query
+2. **Citation Display**: Click on citations to verify PDF highlighting
+3. **Document Upload**: Test processing a new document (if applicable)
+4. **Index Access**: Verify search indexes are accessible
+
+#### 3. Search Index Validation
+
+**Verify search indexes are accessible:**
+```bash
+# List indexes
+az search index list --service-name <search-service-name> --resource-group <target-rg-name>
+
+# Test search query
+az search index search --service-name <search-service-name> \
+    --index-name <index-name> \
+    --search-text "test query" \
+    --resource-group <target-rg-name>
+```
+
+#### 4. Data Integrity Check
+
+**Verify data integrity:**
+```bash
+# Check blob storage containers
+az storage container list --account-name <storage-account-name> --auth-mode login
+
+# Verify document count in search index
+az search index statistics --service-name <search-service-name> \
+    --index-name <index-name> \
+    --resource-group <target-rg-name>
+```
+
+### Troubleshooting Resource Moves
+
+#### Common Issues and Solutions
+
+**1. "Cannot move resource due to dependencies"**
+```bash
+# Solution: Move dependencies first
+# App Service Plan must be moved before App Service
+# Check for hidden dependencies:
+az resource show --ids <resource-id> --query dependencies
+```
+
+**2. "Access denied during move operation"**
+```bash
+# Check your permissions
+az role assignment list --assignee $(az ad signed-in-user show --query id -o tsv) \
+    --resource-group <current-rg-name>
+
+# Ensure you have Contributor or Owner role
+az role assignment create \
+    --assignee $(az ad signed-in-user show --query id -o tsv) \
+    --role "Contributor" \
+    --resource-group <current-rg-name>
+```
+
+**3. "Resource group location mismatch"**
+```bash
+# Check if target resource group is in the same region
+az group show --name <target-rg-name> --query location
+az group show --name <current-rg-name> --query location
+
+# Some resources cannot move between regions
+# Solution: Create new resources in target region if needed
+```
+
+**4. "App Service not responding after move"**
+```bash
+# Restart the App Service
+az webapp restart --name <app-name> --resource-group <target-rg-name>
+
+# Check app service logs
+az webapp log tail --name <app-name> --resource-group <target-rg-name>
+
+# Verify app service plan is in the same resource group
+az webapp show --name <app-name> --resource-group <target-rg-name> --query serverFarmId
+```
+
+**5. "Search index not accessible"**
+```bash
+# Verify search service is running
+az search service show --name <search-service-name> --resource-group <target-rg-name> --query status
+
+# Check if indexes were preserved
+az search index list --service-name <search-service-name> --resource-group <target-rg-name>
+
+# Verify role assignments for search service
+az role assignment list --scope "/subscriptions/$(az account show --query id -o tsv)/resourceGroups/<target-rg-name>"
+```
+
+**6. "Authentication errors after move"**
+```bash
+# Clear Azure CLI cache
+az account clear
+az login
+
+# Refresh azd authentication
+azd auth login
+
+# Verify service principal permissions
+az ad sp list --display-name <app-name> --query '[].appId' -o tsv
+```
+
+#### Rollback Procedures
+
+**If the move fails and you need to rollback:**
+
+**1. Move Resources Back:**
+```bash
+# Get resource IDs from target group
+FAILED_RESOURCE_IDS=$(az resource list --resource-group <target-rg-name> --query '[].id' -o tsv)
+
+# Move back to source group
+for resource_id in $FAILED_RESOURCE_IDS; do
+    az resource move --destination-group <current-rg-name> --ids $resource_id
+done
+```
+
+**2. Restore Environment Configuration:**
+```bash
+# Restore from backup
+cp backup-env-file-$(date +%Y%m%d).env ~/.azure/<environment-name>/.env
+
+# Reset azd environment
+azd env set AZURE_RESOURCE_GROUP <current-rg-name>
+```
+
+**3. Verify Application Functionality:**
+```bash
+# Restart services
+az webapp start --name <app-name> --resource-group <current-rg-name>
+
+# Test application
+src/start.sh
+```
+
+#### Performance Considerations
+
+**Move Operation Timing:**
+- **Small deployment** (basic services): 30-45 minutes
+- **Large deployment** (with ML workspace): 60-90 minutes
+- **Complex deployment** (multiple indexes): 90-120 minutes
+
+**Downtime Minimization:**
+1. Schedule moves during maintenance windows
+2. Consider blue-green deployment for critical applications
+3. Use staging slots for App Service to test configuration
+
+**Post-Move Optimization:**
+```bash
+# Clear any cached connections
+az webapp restart --name <app-name> --resource-group <target-rg-name>
+
+# Verify performance metrics
+az monitor metrics list --resource <app-service-resource-id> \
+    --metric "Http2xx" --interval PT1M
+```
 
 ## Azure Services Used for Deployment  
 The following Azure services are used as part of this deployment. Ensure you verify their billing and pricing details as part of the setup:  
