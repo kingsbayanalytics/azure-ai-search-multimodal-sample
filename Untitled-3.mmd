@@ -1,0 +1,14 @@
+---
+id: d3e8a2a9-765f-4561-a293-8d314ee6b317
+---
+flowchart TD
+    A[PDF Input] --> B[Layout Analysis]
+    B --> C[Text Extraction with Coordinates]
+    B --> D[Image Extraction]  
+    B --> E[Table Detection]
+    B --> F[Document Hierarchy Recognition]
+    C --> G[Structured Content with Bounding Boxes]
+    D --> G
+    E --> G
+    F --> G
+    G --> H[Spatial Relationships Preserved]

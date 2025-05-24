@@ -1,0 +1,22 @@
+---
+id: a6fe329f-eb33-4190-a7bb-88fbf5144894
+---
+flowchart TD
+    A[PDF Input] --> B[DocumentProcessor.extract_content]
+    B --> C[Text Blocks Extraction]
+    B --> D[Image Extraction]
+    C --> E[Text Block Processing]
+    D --> F[ImageVerbalizer.describe_image]
+    F --> G[Image Descriptions]
+    E --> H[Enhanced Content Combination]
+    G --> H
+    H --> I[EmbeddingGenerator.generate_embeddings]
+    I --> J[Vector Embeddings Generation]
+    J --> K[Document Structure Creation]
+    K --> L[IndexBuilder.upload_documents]
+    L --> M[Azure Search Index]
+    
+    style A fill:#e1f5fe
+    style M fill:#e8f5e8
+    style F fill:#fff3e0
+    style I fill:#f3e5f5

@@ -1,0 +1,22 @@
+---
+id: 9c8c715c-5e91-4497-b6bf-3983ba15262b
+---
+flowchart TD
+    A[PDF Input] --> B[DocumentProcessor]
+    B --> C[Text Extraction<br/>+ Coordinates]
+    B --> D[Image Extraction<br/>+ Metadata]
+    C --> E[Text Chunking<br/>with Overlap]
+    D --> F{Image Analysis<br/>Strategy}
+    F -->|Mistral OCR| G[Text Extraction<br/>from Images]
+    F -->|GPT-4o Vision| H[Visual Description<br/>Generation]
+    F -->|Hybrid| I[OCR + Visual<br/>Description]
+    E --> J[EmbeddingGenerator]
+    G --> J
+    H --> J
+    I --> J
+    J --> K{Embedding<br/>Strategy}
+    K -->|Local| L[SentenceTransformers<br/>Embeddings]
+    K -->|Azure OpenAI| M[text-embedding-3-large<br/>Embeddings]
+    L --> N[IndexBuilder]
+    M --> N
+    N --> O[Azure Search Index]

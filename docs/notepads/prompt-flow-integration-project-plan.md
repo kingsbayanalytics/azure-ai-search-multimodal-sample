@@ -21,15 +21,28 @@ This document outlines a comprehensive plan for enhancing the Azure AI Search Mu
 - **Document Processing**: Azure Document Intelligence integration
 
 **Current Flow:**
-```
-User Query → MultimodalRag → [Search Grounding | Knowledge Agent] → OpenAI GPT-4o → Response with Citations
+```mermaid
+flowchart LR
+    A[User Query] --> B[MultimodalRag]
+    B --> C{Search Backend}
+    C -->|Option 1| D[Search Grounding]
+    C -->|Option 2| E[Knowledge Agent]
+    D --> F[OpenAI GPT-4o]
+    E --> F
+    F --> G[Response with Citations]
 ```
 
 ### 1.2 Proposed Prompt Flow Architecture
 
 **Target Architecture:**
-```
-User Query → Prompt Flow Endpoint → [Re-ranking Flow] → [Context Generation] → [Prompt Variants] → [Chat History Integration] → Response
+```mermaid
+flowchart LR
+    A[User Query] --> B[Prompt Flow Endpoint]
+    B --> C[Re-ranking Flow]
+    C --> D[Context Generation]
+    D --> E[Prompt Variants]
+    E --> F[Chat History Integration]
+    F --> G[Response]
 ```
 
 **Key Integration Points:**
@@ -91,7 +104,83 @@ prompt_variants:
 
 **Implementation Approach:**
 
-#### 1.3.1 Citation Metadata Flow
+#### 1.3.1 Citation Metadata Structure Analysis
+
+The citation system relies on a specific metadata structure that must be preserved through Prompt Flow processing. This structure (detailed in section 4.1.3) consists of two primary citation types:
+
+**Text Citations Structure:**
+```json
+{
+  "ref_id": "doc_001_page_5",           // Unique identifier for UI correlation
+  "content_type": "text",               // Differentiates citation type
+  "title": "AI Research Paper.pdf",     // Document title for blob storage reference
+  "text": "Selected text content...",    // Extracted text content
+  "locationMetadata": {
+    "pageNumber": 5,                    // Exact page for PDF display
+    "boundingPolygons": "[[{\"x\":0.1,\"y\":0.2},...]]"  // JSON-encoded coordinates
+  }
+}
+```
+
+**Image Citations Structure:**
+```json
+{
+  "ref_id": "doc_001_img_3",            // Unique identifier for UI correlation
+  "content_type": "image",              // Differentiates citation type
+  "title": "AI Research Paper.pdf",     // Document title for blob storage reference
+  "content": "artifacts/doc_001_img_3.png",  // Blob storage path to image
+  "locationMetadata": {
+    "pageNumber": 7,                    // Exact page for PDF display
+    "boundingPolygons": "[[{\"x\":0.1,\"y\":0.5},...]]"  // JSON-encoded coordinates
+  }
+}
+```
+
+**Citation Metadata Components Breakdown:**
+
+1. **`ref_id`**: Unique identifier enabling frontend correlation between responses and visual highlights
+2. **`content_type`**: Determines rendering strategy (`text` vs `image` citations)
+3. **`title`**: Links to original document for PDF retrieval from blob storage
+4. **`locationMetadata.pageNumber`**: Specifies exact PDF page for display
+5. **`locationMetadata.boundingPolygons`**: Normalized coordinates (0.0-1.0) for precise highlighting
+
+**Search Index Integration:**
+
+The citation metadata flows through the search architecture as follows:
+
+```mermaid
+flowchart TD
+    A[Document Processing] --> B[Azure Search Index]
+    B --> C[locationMetadata Complex Field]
+    C --> D[pageNumber: Int32]
+    C --> E[boundingPolygons: String]
+    B --> F[content_text: SearchableField]
+    B --> G[content_path: SimpleField]
+    H[Search Query] --> B
+    B --> I[Search Results with Metadata]
+    I --> J[Citation Extraction Process]
+    J --> K[Frontend Citation Display]
+```
+
+**Index Schema Dependencies:**
+
+The Azure Search index must maintain these specific field mappings:
+- `locationMetadata` (ComplexField) containing spatial data
+- `content_id` (SimpleField) for unique document identification  
+- `document_title` (SearchableField) for blob storage reference
+- `content_path` (SimpleField) for image asset retrieval
+
+**Prompt Flow Preservation Requirements:**
+
+For successful integration, Prompt Flow must:
+1. **Preserve coordinate precision** through all processing steps
+2. **Maintain JSON structure** of boundingPolygons exactly as stored
+3. **Correlate ref_ids** between search results and final responses
+4. **Preserve blob storage paths** for image citation retrieval
+
+See section 4.1.3 for the complete citation data structure that enables the visual highlighting functionality.
+
+#### 1.3.2 Citation Metadata Flow
 ```python
 class VisualCitationHandler:
     def preserve_visual_metadata(self, grounding_results: GroundingResults) -> dict:
@@ -223,9 +312,9 @@ class ChatHistoryManager:
   - OpenAI GPT-4o
   - Text Embedding 3 Large
 - **Estimated Monthly Cost**: $150-300
-  - Document Intelligence: $1.50 per 1,000 pages
-  - GPT-4o: $0.005 per 1K input tokens, $0.015 per 1K output tokens
-  - Text Embedding: $0.00013 per 1K tokens
+  - Document Intelligence: $1.50 per 1,000 pages ([Source](https://azure.microsoft.com/en-us/pricing/details/ai-document-intelligence/))
+  - GPT-4o: $0.005 per 1K input tokens, $0.015 per 1K output tokens ([Source](https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/))
+  - Text Embedding: $0.00013 per 1K tokens ([Source](https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/))
 
 #### 3.1.2 Azure AI Search
 - **Service Tier**: Standard S1 (recommended for production)
@@ -233,8 +322,8 @@ class ChatHistoryManager:
   - 50 search units
   - 25 MB storage per search unit
   - Semantic search capabilities
-- **Monthly Cost**: $250
-- **Storage**: Additional $0.40 per GB beyond included
+- **Monthly Cost**: $250 ([Source](https://azure.microsoft.com/en-us/pricing/details/search/))
+- **Storage**: Additional $0.40 per GB beyond included ([Source](https://azure.microsoft.com/en-us/pricing/details/search/))
 
 #### 3.1.3 Azure Blob Storage
 - **Service Tier**: Standard LRS
@@ -242,14 +331,14 @@ class ChatHistoryManager:
   - Document storage container (`mm-sample-docs-container`)
   - Artifacts container (`mm-knowledgestore-artifacts`)
 - **Monthly Cost**: $20-50
-  - Hot tier: $0.0184 per GB
-  - Transaction costs: $0.004 per 10,000 operations
+  - Hot tier: $0.0184 per GB ([Source](https://azure.microsoft.com/en-us/pricing/details/storage/blobs/))
+  - Transaction costs: $0.004 per 10,000 operations ([Source](https://azure.microsoft.com/en-us/pricing/details/storage/blobs/))
 
 #### 3.1.4 Azure App Service
 - **Service Tier**: Basic B1
 - **Specifications**: 1 core, 1.75 GB RAM
-- **Monthly Cost**: $13.14
-- **Production Recommendation**: Standard S1 ($54.75) or Premium P1v2 ($70)
+- **Monthly Cost**: $13.14 ([Source](https://azure.microsoft.com/en-us/pricing/details/app-service/windows/))
+- **Production Recommendation**: Standard S1 ($54.75) or Premium P1v2 ($70) ([Source](https://azure.microsoft.com/en-us/pricing/details/app-service/windows/))
 
 #### 3.1.5 Cohere Embedding Model (Serverless)
 - **Model**: Cohere-embed-v3-multilingual
@@ -263,13 +352,13 @@ class ChatHistoryManager:
 #### 3.2.1 Azure Machine Learning Workspace
 - **Requirement**: Needed for Prompt Flow deployment
 - **Service Tier**: Basic
-- **Monthly Cost**: $0 (compute charges apply separately)
+- **Monthly Cost**: $0 (compute charges apply separately) ([Source](https://azure.microsoft.com/en-us/pricing/details/machine-learning/))
 
 #### 3.2.2 Prompt Flow Compute
 - **Managed Compute**: 
   - Standard_DS3_v2 (4 cores, 14 GB RAM) for development
   - Standard_DS4_v2 (8 cores, 28 GB RAM) for production
-- **Monthly Cost**: 
+- **Monthly Cost**: ([Source](https://azure.microsoft.com/en-us/pricing/details/machine-learning/))
   - Development: $150-200
   - Production: $300-400
 
@@ -279,8 +368,8 @@ class ChatHistoryManager:
 - **Estimated Monthly Cost**: $10-25
 
 #### 3.2.4 Enhanced Monitoring & Logging
-- **Application Insights**: Enhanced telemetry for flow monitoring
-- **Log Analytics**: Detailed performance metrics
+- **Application Insights**: Enhanced telemetry for flow monitoring ([Source](https://azure.microsoft.com/en-us/pricing/details/monitor/))
+- **Log Analytics**: Detailed performance metrics ([Source](https://azure.microsoft.com/en-us/pricing/details/monitor/))
 - **Monthly Cost**: $20-50
 
 **Total Additional Monthly Cost: $180-475**
@@ -291,10 +380,10 @@ class ChatHistoryManager:
 #### 3.3.1 Current Processing Pipeline Costs
 
 **Per Document (Average 20-page PDF):**
-- Document Intelligence: $0.03 (20 pages × $1.50/1,000 pages)
-- Text Embedding Generation: $0.05 (estimated 10K tokens)
+- Document Intelligence: $0.03 (20 pages × $1.50/1,000 pages) ([Source](https://azure.microsoft.com/en-us/pricing/details/ai-document-intelligence/))
+- Text Embedding Generation: $0.05 (estimated 10K tokens) ([Source](https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/))
 - Image Embedding Generation: $0.10 (estimated 5 images)
-- Search Index Updates: $0.01
+- Search Index Updates: $0.01 ([Source](https://azure.microsoft.com/en-us/pricing/details/search/))
 - **Total per document: $0.19**
 
 **Monthly Processing Volume Estimates:**
@@ -348,8 +437,12 @@ class ChatHistoryManager:
 The visual citation system is the crown jewel of this application. Here's how it works:
 
 #### 4.1.1 Data Flow
-```
-Backend Citations → Frontend API → CitationViewer → PdfHighlighter → Canvas Overlay
+```mermaid
+flowchart LR
+    A[Backend Citations] --> B[Frontend API]
+    B --> C[CitationViewer]
+    C --> D[PdfHighlighter]
+    D --> E[Canvas Overlay]
 ```
 
 #### 4.1.2 Component Analysis
@@ -616,4 +709,4 @@ class PromptFlowCitationAdapter:
 
 ---
 
-*This document serves as the master plan for the Prompt Flow integration project. All decisions should reference this analysis for consistency and strategic alignment.* 
+*This document serves as the master plan for the Prompt Flow integration project. All decisions should reference this analysis for consistency and strategic alignment.*

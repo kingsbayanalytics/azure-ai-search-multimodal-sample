@@ -8,23 +8,53 @@
 - [Getting Started](#getting-started)
    - [General Requirements](#general-requirements)
 - [Environment setup](#environment-setup)
-   - [Github codespaces](#github-codespaces)
    - [Local development setup (Windows or Linux)](#local-development-setup-windows-or-linux)
    - [Provision resources and deploy working app](#provision-resources-and-deploy-working-app)
    - [Debug app locally](#debug-app-locally)
    - [Bring your own data (supports .pdf only)](#bring-your-own-data-supports-pdf-only)
 - [Processing New Documents and Creating Additional Indexes](#processing-new-documents-and-creating-additional-indexes)
    - [Document Placement and Preparation](#document-placement-and-preparation)
+      - [1. Document Location Structure](#1-document-location-structure)
+      - [2. Document Requirements and Specifications](#2-document-requirements-and-specifications)
+      - [3. Pre-Processing Checklist](#3-pre-processing-checklist)
    - [Index Creation Process](#index-creation-process)
-   - [Preprocessing Pipeline Details](#preprocessing-pipeline-details)
+      - [1. Creating a New Index for Book Collection](#1-creating-a-new-index-for-book-collection)
+      - [2. Understanding Indexer Strategies](#2-understanding-indexer-strategies)
+      - [2.1 Deep Dive: How indexer-image-verbal Works](#21-deep-dive-how-indexer-image-verbal-works)
+         - [Azure Cognitive Search Skills Pipeline](#azure-cognitive-search-skills-pipeline)
+         - [Skill 1: Document Extraction Skill (Document Intelligence Layout)](#skill-1-document-extraction-skill-document-intelligence-layout)
+         - [Skill 2: GenAI Prompt Skill (Image Verbalization)](#skill-2-genai-prompt-skill-image-verbalization)
+         - [Skill 3: Vector Embeddings Skill](#skill-3-vector-embeddings-skill)
+         - [Skill 4: Shaper Skill](#skill-4-shaper-skill)
+      - [2.2 Cost-Effective Python Replication Strategy](#22-cost-effective-python-replication-strategy)
+         - [Alternative Technology Stack](#alternative-technology-stack)
+         - [Implementation Architecture](#implementation-architecture)
+         - [Image Verbalization Strategy Comparison](#image-verbalization-strategy-comparison)
    - [Cost Estimation for Document Processing](#cost-estimation-for-document-processing)
+      - [Per-Document Processing Costs](#per-document-processing-costs)
+      - [Monthly Processing Volume Estimates](#monthly-processing-volume-estimates)
+      - [Cost Optimization Strategies](#cost-optimization-strategies)
    - [Troubleshooting Document Processing](#troubleshooting-document-processing)
+      - [Common Issues and Solutions](#common-issues-and-solutions)
+      - [Processing Performance Optimization](#processing-performance-optimization)
+      - [Validation and Quality Assurance](#validation-and-quality-assurance)
+      - [Recovery and Rollback Procedures](#recovery-and-rollback-procedures)
 - [Moving Services to an Existing Resource Group](#moving-services-to-an-existing-resource-group)
    - [Prerequisites and Planning](#prerequisites-and-planning)
+      - [1. Resource Inventory Assessment](#1-resource-inventory-assessment)
+      - [2. Move Compatibility Check](#2-move-compatibility-check)
+      - [3. Prerequisites Checklist](#3-prerequisites-checklist)
+      - [4. Backup and Documentation](#4-backup-and-documentation)
    - [Resource Move Process](#resource-move-process)
+      - [Phase 1: Prepare for Move (Estimated time: 15-30 minutes)](#phase-1-prepare-for-move-estimated-time-15-30-minutes)
+      - [Phase 2: Execute Resource Move (Estimated time: 30-60 minutes)](#phase-2-execute-resource-move-estimated-time-30-60-minutes)
+      - [Phase 3: Recreate Role Assignments (Estimated time: 10-15 minutes)](#phase-3-recreate-role-assignments-estimated-time-10-15-minutes)
    - [Post-Move Configuration Updates](#post-move-configuration-updates)
    - [Validation and Testing](#validation-and-testing)
    - [Troubleshooting Resource Moves](#troubleshooting-resource-moves)
+      - [Common Issues and Solutions](#common-issues-and-solutions-1)
+      - [Rollback Procedures](#rollback-procedures)
+      - [Performance Considerations](#performance-considerations)
 - [Azure Services Used for Deployment](#azure-services-used-for-deployment)
    - [Role Mapping for the Application](#role-mapping-for-the-application)
 - [End-to-end app diagram](#end-to-end-app-diagram)
@@ -32,7 +62,7 @@
 
 
 
-Welcome to the **Azure AI Search Multimodal RAG Demo**. This repository contains the code for an application designed to showcase [multimodal](https://aka.ms/azs-multimodal) [Retrieval-Augmented Generation (RAG)](https://learn.microsoft.com/azure/search/retrieval-augmented-generation-overview) techniques using [Azure AI Search](https://learn.microsoft.com/azure/search/search-what-is-azure-search). This demo combines AI capabilities to create custom copilots / RAG applications that can query, retrieve, and reason over both text and image data.
+[MIKE EDITS] Welcome to the **Azure AI Search Multimodal RAG Demo**. This repository contains the code for an application designed to showcase [multimodal](https://aka.ms/azs-multimodal) [Retrieval-Augmented Generation (RAG)](https://learn.microsoft.com/azure/search/retrieval-augmented-generation-overview) techniques using [Azure AI Search](https://learn.microsoft.com/azure/search/search-what-is-azure-search). This demo combines AI capabilities to create custom copilots / RAG applications that can query, retrieve, and reason over both text and image data.
 
 With multimodal RAG, you can:
 
@@ -44,6 +74,8 @@ This demo is intentionally kept lean and simple, providing a hands-on experience
 
 Note that currently this sample doesn't have support for table extraction as a structure, but tables are extracted as plain text.
 
+[MIKE NOTE] My plan is to thoroughly understand this app in order to optimize (cost-wise) and prepare for production deployment.
+
 ![image](docs/images/sample_snap_1.jpg) 
 **Text citations**![image](docs/images/sample_snap_3.jpg) ![image](docs/images/sample_snap_2.jpg) 
 **Image citations**![image](docs/images/image-cite-1.jpg) ![image](docs/images/image-cite-2.jpg) 
@@ -51,7 +83,6 @@ Note that currently this sample doesn't have support for table extraction as a s
 ## Azure AI Search Portal: Bring your own index and resources
 You can create an index using the AI Search portal's quick wizard for the multimodal scenario. Once the index is successfully created, you can integrate it with the app by running the following steps:
 
-- Checkout a [code space](#azure-ai-search-multimodal-rag-demo) based on **main** branch
 - Run ```az login --use-device-code```
 - Run 
    ```pwsh
@@ -66,7 +97,7 @@ You can create an index using the AI Search portal's quick wizard for the multim
         -AzureOpenAiEndpointChatCompletionModelName "gpt-4o"
    ```
 
-   Replace the placeholders (`<...>`) with your specific values. This script will configure the app to use the newly created index.  
+   This script will configure the app to use the newly created index.  
    **Assumption**: For app simplicity, ensure 'KnowledgeStoreContainerName' and 'DataSourcesContainerName' must be from same storage account.
 - Ensure your Azure Entra ID user object ID has been granted the necessary permissions for all required resources. See [Role Mapping for the Application](#role-mapping-for-the-application) for details.
 - Run:
@@ -77,28 +108,21 @@ You can create an index using the AI Search portal's quick wizard for the multim
 ## Getting Started
 
 ### General Requirements  
-To deploy and run this application, you will need the following:  
+To deploy and run this application, you will need the following:   
   
-1. **Azure Account**  
-   - If you're new to Azure, you can [sign up for a free Azure account](https://azure.microsoft.com/free) and receive some free credits to get started.   
-   - Follow the guide to deploy using the free trial if applicable.  
-  
-2. **Azure Account Permissions**  
+1. **Azure Account Permissions**  
    - Your Azure account must have sufficient permissions to perform deployments. Specifically, you need:  
      - `Microsoft.Authorization/roleAssignments/write` permissions, such as those granted by the **Role Based Access Control (RBAC) Administrator**, **User Access Administrator**, or **Owner** roles.  
      - **Subscription-level permissions**. Alternatively, if you don't have subscription-level permissions, you must be granted RBAC access for an existing resource group where you'll deploy the application.  
      - `Microsoft.Resources/deployments/write` permissions at the subscription level.  
   
-3. **Local Deployment Environment (Optional)**  
+2. **Local Deployment Environment (Optional)**  
    - If a local deployment of the application is required, ensure you have one of the following operating systems set up:  
      - **Windows OS**  
      - **Linux OS**  
 ---  
 
 ## Environment setup
-
-### Github codespaces
-- Checkout a [code space](#azure-ai-search-multimodal-rag-demo) based on **main** branch
 
 ### Local development setup (Windows or Linux)
 Install the below tools
@@ -145,7 +169,7 @@ NOTE: It may take 5-10 minutes after you see 'SUCCESS' for the application to be
 - To index your own data,
    - Place pdf's under ```/data``` folder
    - Run ```scripts\prepdocs.ps1```
-- You could also use different indexer strategies **["indexer-image-verbal", "self-multimodal-embedding"]**
+- You could also use different indexer strategies **["indexer-image-verbal", "self-multimodal-embedding"]** [MIKE NOTE] Want to stray away from "self-multimodal-embedding" b/c 4o-Vision expensive
 - To create new index with a different strategy
   - Run ```azd set SEARCH_INDEX_NAME <new-index-name>```
   - **On Windows** Run ```scripts\prepdocs.ps1 -IndexerStrategy indexer-image-verbal ```
@@ -155,7 +179,7 @@ NOTE: It may take 5-10 minutes after you see 'SUCCESS' for the application to be
 
 ## Processing New Documents and Creating Additional Indexes
 
-This section provides comprehensive instructions for adding new documents (such as book PDFs) to your multimodal RAG system and creating specialized indexes for different document collections.
+[MIKE ADDED] This section provides comprehensive instructions for adding new documents (such as book PDFs) to your multimodal RAG system and creating specialized indexes for different document collections.
 
 ### Document Placement and Preparation
 
@@ -174,7 +198,7 @@ azure-ai-search-multimodal-sample/
 #### 2. Document Requirements and Specifications
 
 **Supported Formats:**
-- **PDF only** (current limitation)
+- **PDF only** (current limitation) [MIKE NOTE] Why? Can we expand?
 - **Maximum file size**: 500 MB per document (Azure Document Intelligence limit)
 - **Page limit**: 2,000 pages per document (recommended for cost optimization)
 
@@ -212,6 +236,8 @@ Before placing documents in the `/data` folder:
    print(f'Pages: {pages}, Size: {file_size_mb:.1f}MB, Est. Processing Cost: ${estimated_cost:.2f}')
    "
    ```
+
+[MIKE NOTE] We should add this into the full optimized solution
 
 ### Index Creation Process
 
@@ -271,105 +297,375 @@ scripts/prepdocs.sh self-multimodal-embedding
 - Processing time: ~2-3 minutes per page
 - Cost: Higher due to GPT-4o image processing
 
-**`self-multimodal-embedding` (For image-heavy documents):**
-- Creates both text and image embeddings
-- Preserves visual context for complex diagrams
-- Best for: Scientific papers, infographics, visual-heavy content
-- Processing time: ~1-2 minutes per page
-- Cost: Moderate, uses embedding models
+#### 2.1 Deep Dive: How indexer-image-verbal Works
 
-**Default Strategy:**
-- Basic text extraction with simple image handling
-- Fastest processing
-- Best for: Text-heavy documents with minimal images
-- Processing time: ~30 seconds per page
-- Cost: Lowest
+The `indexer-image-verbal` strategy uses a sophisticated pipeline of Azure Cognitive Search skills to process multimodal documents. Understanding these skills enables cost-effective replication using Python packages.
 
-### Preprocessing Pipeline Details
-
-#### 1. Document Processing Workflow
-
-The preprocessing pipeline (`src/backend/processfile.py`) performs these steps:
+##### Azure Cognitive Search Skills Pipeline
 
 ```mermaid
 flowchart LR
-    A[Document Input] --> B[Document Intelligence Analysis]
-    B --> C[Content Extraction]
-    C --> D[Embedding Generation]
-    D --> E[Index Upload]
+    A[Document Extraction Skill] --> B[GenAI Prompt Skill]
+    B --> C[Vector Embeddings Skill]
+    C --> D[Search Index]
 ```
 
-**Detailed Process Flow:**
+##### Skill 1: Document Extraction Skill (Document Intelligence Layout)
 
-1. **Document Intelligence Analysis** (`_process_pdf` method):
-   ```python
-   # Key processing parameters from processfile.py
-   analyze_request = AnalyzeDocumentRequest(
-       url_source=None,
-       output_content_format="markdown",  # Preserves structure
-       output_option=[AnalyzeOutputOption.FIGURES]  # Extracts images
-   )
-   ```
+**Purpose**: Extracts structured content from PDFs with layout analysis
 
-2. **Content Chunking** (`_chunk_text_with_metadata` method):
-   - **Chunk size**: ~1000 characters with overlap
-   - **Metadata preservation**: Page numbers, bounding polygons
-   - **Structure retention**: Headings, paragraphs, lists
-
-3. **Image Processing** (`_extract_figures` method):
-   - **Image extraction**: Converts to base64 for analysis
-   - **Visual description**: GPT-4o generates descriptions
-   - **Embedding creation**: Cohere multimodal embeddings
-
-4. **Index Schema Creation**:
-   ```python
-   # Core fields created for each document
-   fields = [
-       SimpleField(name="content_id", type=SearchFieldDataType.String, key=True),
-       SearchableField(name="content_text", type=SearchFieldDataType.String),
-       SearchField(name="content_embedding", vector_search_dimensions=1024),
-       ComplexField(name="locationMetadata", fields=[
-           SimpleField(name="pageNumber", type=SearchFieldDataType.Int32),
-           SimpleField(name="boundingPolygons", type=SearchFieldDataType.String)
-       ])
-   ]
-   ```
-
-#### 2. Monitoring Processing Progress
-
-**Real-time Monitoring:**
-```bash
-# Watch processing logs
-tail -f /tmp/document_processing.log
-
-# Monitor Azure costs during processing
-az consumption usage list --start-date $(date -d '1 day ago' +%Y-%m-%d) --end-date $(date +%Y-%m-%d)
+**Process Flow:**
+```mermaid
+flowchart TD
+    A[PDF Input] --> B[Layout Analysis]
+    B --> C[Text Extraction with Coordinates]
+    B --> D[Image Extraction]  
+    B --> E[Table Detection]
+    B --> F[Document Hierarchy Recognition]
+    C --> G[Structured Content with Bounding Boxes]
+    D --> G
+    E --> G
+    F --> G
+    G --> H[Spatial Relationships Preserved]
 ```
 
-**Processing Status Indicators:**
-- **Document Analysis Phase**: "Analyzing document with Document Intelligence..."
-- **Image Extraction Phase**: "Extracting figures from document..."
-- **Embedding Generation Phase**: "Generating embeddings for content..."
-- **Index Upload Phase**: "Uploading documents to search index..."
+**What it does:**
+- Analyzes document layout and structure
+- Extracts text with precise bounding box coordinates
+- Identifies and extracts embedded images
+- Recognizes tables, headings, and document hierarchy
+- Preserves spatial relationships between elements
 
-#### 3. Customizing Processing for Specific Document Types
+**Cost**: ~$1.50 per 1,000 pages
 
-**For Academic Papers/Research Documents:**
-```powershell
-# Use image-verbal strategy with custom parameters
-scripts\prepdocs.ps1 -IndexerStrategy "indexer-image-verbal" -ChunkSize 1500 -ChunkOverlap 200
+##### Skill 2: GenAI Prompt Skill (Image Verbalization)
+
+**Purpose**: Converts images to searchable text descriptions
+
+**Process Flow:**
+```mermaid
+flowchart TD
+    A[Base64 Image Input] --> B[Multimodal LLM Analysis]
+    B --> C[Chart/Diagram Identification]
+    B --> D[Visual Element Recognition]
+    B --> E[OCR Text Extraction]
+    C --> F[Detailed Textual Description]
+    D --> F
+    E --> F
+    F --> G[Contextually Relevant Descriptions]
 ```
 
-**For Technical Manuals:**
-```powershell
-# Emphasize structure preservation
-scripts\prepdocs.ps1 -IndexerStrategy "self-multimodal-embedding" -PreserveStructure $true
+**What it does:**
+- Analyzes images using multimodal LLM
+- Generates detailed textual descriptions
+- Identifies charts, diagrams, and visual elements
+- Extracts text visible in images (OCR-like functionality)
+- Creates contextually relevant descriptions
+
+**Cost**: ~$0.01-0.05 per image (depending on complexity)
+
+##### Skill 3: Vector Embeddings Skill
+
+**Purpose**: Creates semantic search vectors from text content
+
+**Process Flow:**
+```mermaid
+flowchart TD
+    A[Text Content Input] --> B[Tokenization]
+    B --> C[Embedding Model Processing]
+    C --> D[High-Dimensional Vector Generation]
+    D --> E[Semantic Similarity Optimization]
+    E --> F[Multilingual Content Support]
+    F --> G[Search-Optimized 1024-dim Vector]
 ```
 
-**For Legal Documents:**
-```powershell
-# Focus on precise text extraction
-scripts\prepdocs.ps1 -IndexerStrategy "default" -HighPrecisionText $true
+**What it does:**
+- Converts text to high-dimensional vectors
+- Enables semantic similarity search
+- Supports multilingual content
+- Optimizes for search relevance
+
+**Cost**: ~$0.00013 per 1K tokens
+
+##### Skill 4: Shaper Skill
+
+**Purpose**: Structures and maps data between pipeline stages
+
+**Process Flow:**
+```mermaid
+flowchart TD
+    A[Raw Extracted Data] --> B[Content Field Mapping]
+    A --> C[Metadata Preservation]
+    B --> D[Text + Image Description Combination]
+    C --> E[Page Numbers & Coordinates]
+    D --> F[Index Schema Alignment]
+    E --> F
+    F --> G[Structured Search Document]
+```
+
+**What it does:**
+- Maps extracted content to index fields
+- Combines text and image descriptions
+- Preserves metadata (page numbers, coordinates)
+- Structures output for search index
+
+#### 2.2 Cost-Effective Python Replication Strategy
+
+##### Alternative Technology Stack
+
+**Document Processing Alternatives:**
+```python
+# Instead of Azure Document Intelligence ($1.50/1K pages)
+import fitz  # PyMuPDF - Free, excellent for text and layout extraction
+import pdfplumber  # Free, specialized for table extraction and precise text positioning  
+import pymupdf4llm  # Free, optimized for LLM consumption with markdown output
+
+# Note: unstructured.partition_pdf() provides automatic element detection (text, tables, images)
+# but requires their paid API or complex local model setup. The above alternatives provide
+# similar functionality with better cost control and simpler deployment.
+```
+
+**Image Verbalization Alternatives:**
+```python
+# Mistral OCR - Cost-effective, excellent for text extraction from images
+import openai  # Mistral OCR via Azure AI Foundry endpoint
+# Cost: ~$0.003-0.007 per image, excellent for documents with text/tables
+
+# Azure OpenAI Vision - Comprehensive visual understanding  
+import openai  # GPT-4o Vision via your existing Azure OpenAI endpoint
+# Cost: ~$0.01-0.015 per image vs $0.05 with GenAI Prompt Skill
+
+# Hybrid approach: Use both for optimal results
+# Mistral OCR for text extraction + GPT-4o Vision for visual elements
+```
+
+**Vector Embedding Alternatives:**
+```python
+# Local embedding models (free)
+from sentence_transformers import SentenceTransformer  # Free local models
+
+# Azure OpenAI Embedding Models (recommended for production)
+# text-embedding-3-large: Best quality, 3072 dimensions, $0.00013/1K tokens
+# text-embedding-3-small: Good quality, 1536 dimensions, $0.000020/1K tokens
+import openai  # Use your existing Azure OpenAI endpoint
+```
+
+##### Implementation Architecture
+
+```mermaid
+flowchart TD
+    A[PDF Input] --> B[DocumentProcessor]
+    B --> C[Text Extraction<br/>+ Coordinates]
+    B --> D[Image Extraction<br/>+ Metadata]
+    C --> E[Text Chunking<br/>with Overlap]
+    D --> F{Image Analysis<br/>Strategy}
+    F -->|Mistral OCR| G[Text Extraction<br/>from Images]
+    F -->|GPT-4o Vision| H[Visual Description<br/>Generation]
+    F -->|Hybrid| I[OCR + Visual<br/>Description]
+    E --> J[EmbeddingGenerator]
+    G --> J
+    H --> J
+    I --> J
+    J --> K{Embedding<br/>Strategy}
+    K -->|Local| L[SentenceTransformers<br/>Embeddings]
+    K -->|Azure OpenAI| M[text-embedding-3-large<br/>Embeddings]
+    L --> N[IndexBuilder]
+    M --> N
+    N --> O[Azure Search Index]
+```
+
+**Pseudo Code Process Flow:**
+
+```python
+# DocumentProcessor Module
+class DocumentProcessor:
+    def extract_content(self, pdf_path):
+        doc = fitz.open(pdf_path)
+        text_blocks = []
+        images = []
+        
+        for page_num, page in enumerate(doc):
+            # Extract text with coordinates
+            text_dict = page.get_text("dict")
+            for block in text_dict["blocks"]:
+                if "lines" in block:  # Text block
+                    text_blocks.append({
+                        'content': extract_text_from_block(block),
+                        'bbox': block["bbox"],
+                        'page': page_num
+                    })
+            
+            # Extract images with metadata
+            image_list = page.get_images()
+            for img_index, img in enumerate(image_list):
+                pix = fitz.Pixmap(doc, img[0])
+                images.append({
+                    'data': pix.tobytes("png"),
+                    'bbox': get_image_bbox(page, img),
+                    'page': page_num
+                })
+        
+        return {'text_blocks': text_blocks, 'images': images}
+
+# ImageVerbalizer Module  
+class ImageVerbalizer:
+    def __init__(self, strategy="hybrid"):
+        """
+        strategy options:
+        - 'mistral_ocr': Mistral OCR (cost-effective, excellent for text extraction)
+        - 'gpt4o_vision': GPT-4o Vision (comprehensive, best for complex visuals)
+        - 'hybrid': Mistral OCR + GPT-4o Vision (best quality, moderate cost)
+        """
+        self.strategy = strategy
+        
+        if strategy in ["mistral_ocr", "hybrid"]:
+            self.mistral_client = openai.AzureOpenAI(
+                base_url="https://your-mistral-endpoint.azure.com",
+                api_key="your-mistral-key"
+            )
+            
+        if strategy in ["gpt4o_vision", "hybrid"]:
+            self.openai_client = openai.AzureOpenAI(
+                base_url="https://your-openai-endpoint.azure.com", 
+                api_key="your-openai-key"
+            )
+    
+    def describe_image(self, image_data, context=""):
+        if self.strategy == "mistral_ocr":
+            return self._mistral_ocr_description(image_data, context)
+        elif self.strategy == "gpt4o_vision":
+            return self._gpt4o_vision_description(image_data, context)
+        elif self.strategy == "hybrid":
+            # Use both for comprehensive coverage
+            ocr_text = self._mistral_ocr_description(image_data, context)
+            visual_desc = self._gpt4o_vision_description(image_data, context)
+            return f"OCR Content: {ocr_text}\n\nVisual Description: {visual_desc}"
+    
+    def _mistral_ocr_description(self, image_data, context):
+        base64_image = base64.b64encode(image_data).decode('utf-8')
+        response = self.mistral_client.chat.completions.create(
+            model="mistral-large-vision",
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": f"Extract and describe all text content from this image. Context: {context}"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}}
+                ]
+            }],
+            max_tokens=1000
+        )
+        return response.choices[0].message.content
+    
+    def _gpt4o_vision_description(self, image_data, context):
+        base64_image = base64.b64encode(image_data).decode('utf-8')
+        response = self.openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": f"Describe this image's visual elements, charts, diagrams, and overall content. Focus on searchable details. Context: {context}"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}}
+                ]
+            }],
+            max_tokens=1000
+        )
+        return response.choices[0].message.content
+
+**Image Verbalization Strategy Comparison:**
+
+| Strategy | Strength | Cost per Image | Best For |
+|----------|----------|----------------|----------|
+| **Mistral OCR** | Text extraction, cost-effective | $0.003-0.007 | Text-heavy documents, scanned materials, tables |
+| **GPT-4o Vision** | Rich descriptions, context understanding | $0.01-0.015 | Visual content, diagrams, comprehensive analysis |
+| **Hybrid** | Best quality, comprehensive coverage | $0.013-0.022 | Production systems, mixed content, highest quality |
+| **Azure GenAI Prompt Skill** | Integrated pipeline | $0.05 | Azure Skills pipeline only |
+
+**When to Use Each Strategy:**
+
+- **Use Mistral OCR when:** Documents contain lots of scanned text, handwriting, tables, or when budget is primary concern
+- **Use GPT-4o Vision when:** Documents contain complex diagrams, charts, or visual elements requiring contextual understanding  
+- **Use Hybrid approach when:** Need best of both worlds, budget allows comprehensive processing, or documents mix text-heavy and visual-heavy content
+
+# EmbeddingGenerator Module
+class EmbeddingGenerator:
+    def __init__(self, strategy="azure_openai"):
+        if strategy == "local":
+            self.model = SentenceTransformer('all-MiniLM-L6-v2')
+        else:
+            self.client = openai.AzureOpenAI(...)
+    
+    def generate_embeddings(self, texts):
+        if self.strategy == "local":
+            return self.model.encode(texts).tolist()
+        else:
+            response = self.client.embeddings.create(
+                model="text-embedding-3-large",
+                input=texts
+            )
+            return [item.embedding for item in response.data]
+
+# Main Orchestrator
+class MultimodalIndexer:
+    def process_pdf(self, pdf_path):
+        # Step 1: Extract content
+        content = self.document_processor.extract_content(pdf_path)
+        
+        # Step 2: Process images
+        enhanced_content = []
+        for text_block in content['text_blocks']:
+            enhanced_content.append(text_block)
+        
+        for image in content['images']:
+            description = self.image_verbalizer.describe_image(
+                image['data'], 
+                context=f"Image from page {image['page']}"
+            )
+            enhanced_content.append({
+                'content': description,
+                'bbox': image['bbox'],
+                'page': image['page'],
+                'type': 'image_description'
+            })
+        
+        # Step 3: Generate embeddings
+        texts = [item['content'] for item in enhanced_content]
+        embeddings = self.embedding_generator.generate_embeddings(texts)
+        
+        # Step 4: Upload to search index
+        documents = []
+        for i, item in enumerate(enhanced_content):
+            documents.append({
+                'id': f"{pdf_path}_{item['page']}_{i}",
+                'content': item['content'],
+                'embedding': embeddings[i],
+                'page': item['page'],
+                'bbox': item['bbox'],
+                'source': pdf_path
+            })
+        
+        return self.index_builder.upload_documents(documents)
+
+**Complete Pipeline Flow:**
+```mermaid
+flowchart TD
+    A[PDF Input] --> B[DocumentProcessor.extract_content]
+    B --> C[Text Blocks Extraction]
+    B --> D[Image Extraction]
+    C --> E[Text Block Processing]
+    D --> F[ImageVerbalizer.describe_image]
+    F --> G[Image Descriptions]
+    E --> H[Enhanced Content Combination]
+    G --> H
+    H --> I[EmbeddingGenerator.generate_embeddings]
+    I --> J[Vector Embeddings Generation]
+    J --> K[Document Structure Creation]
+    K --> L[IndexBuilder.upload_documents]
+    L --> M[Azure Search Index]
+    
+    style A fill:#e1f5fe
+    style M fill:#e8f5e8
+    style F fill:#fff3e0
+    style I fill:#f3e5f5
 ```
 
 ### Cost Estimation for Document Processing
