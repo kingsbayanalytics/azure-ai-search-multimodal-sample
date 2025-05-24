@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+I'd like the agent to check with me before creating python environments or conda environments to ask me for names or other pertinent configuration parameters

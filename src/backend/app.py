@@ -1,6 +1,7 @@
 import logging
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 from aiohttp import web
 from rich.logging import RichHandler
 from openai import AsyncAzureOpenAI
@@ -22,6 +23,8 @@ from multimodalrag import MultimodalRag
 from data_model import DocumentPerChunkDataModel
 from citation_file_handler import CitationFilesHandler
 
+# Load environment variables from .env file
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,

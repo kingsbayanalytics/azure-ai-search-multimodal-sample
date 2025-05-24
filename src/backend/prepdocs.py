@@ -6,6 +6,7 @@ import instructor
 import aiofiles
 import asyncio
 import sys
+from dotenv import load_dotenv
 
 from azure.core.pipeline.policies import UserAgentPolicy
 from azure.ai.documentintelligence.aio import DocumentIntelligenceClient
@@ -24,6 +25,8 @@ from processfile import ProcessFile
 from azure.identity.aio import DefaultAzureCredential
 import argparse
 
+# Load environment variables from .env file
+load_dotenv()
 
 def load_environment_variables():
     """Loads environment variables from the .env file."""
