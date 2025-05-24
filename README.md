@@ -291,8 +291,12 @@ scripts/prepdocs.sh self-multimodal-embedding
 
 The preprocessing pipeline (`src/backend/processfile.py`) performs these steps:
 
-```
-Document Input → Document Intelligence Analysis → Content Extraction → Embedding Generation → Index Upload
+```mermaid
+flowchart LR
+    A[Document Input] --> B[Document Intelligence Analysis]
+    B --> C[Content Extraction]
+    C --> D[Embedding Generation]
+    D --> E[Index Upload]
 ```
 
 **Detailed Process Flow:**
