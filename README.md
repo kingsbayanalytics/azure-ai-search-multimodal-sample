@@ -81,6 +81,96 @@ Note that currently this sample doesn't have support for table extraction as a s
 **Image citations**![image](docs/images/image-cite-1.jpg) ![image](docs/images/image-cite-2.jpg) 
 
 ## Azure AI Search Portal: Bring your own index and resources
+
+### End-to-End Application Architecture
+
+```mermaid
+flowchart TD
+    subgraph "Data Input Layer"
+        A[PDF Documents] 
+        B[User Queries]
+    end
+    
+    subgraph "Azure Document Processing"
+        C[Azure Document Intelligence<br/>Layout Analysis]
+        D[Text Extraction<br/>with Coordinates]
+        E[Image Extraction<br/>with Metadata]
+    end
+    
+    subgraph "AI Processing Services"
+        F[Azure OpenAI GPT-4o<br/>Image Verbalization]
+        G[Mistral OCR<br/>Text Extraction]
+        H[Azure OpenAI<br/>text-embedding-3-large]
+        I[Cohere Serverless<br/>Alternative Embeddings]
+    end
+    
+    subgraph "Azure Search Infrastructure"
+        J[Azure AI Search<br/>Index Creation]
+        K[Vector Store<br/>Semantic Search]
+        L[Knowledge Store<br/>Blob Storage]
+    end
+    
+    subgraph "Application Layer"
+        M[Azure App Service<br/>Python Backend]
+        N[React Frontend<br/>User Interface]
+        O[Search API<br/>RAG Orchestrator]
+    end
+    
+    subgraph "Response Generation"
+        P[Azure OpenAI GPT-4o<br/>Response Generation]
+        Q[Citation Engine<br/>PDF Highlighting]
+        R[Multimodal Results<br/>Text + Visual Citations]
+    end
+    
+    %% Data Flow
+    A --> C
+    C --> D
+    C --> E
+    D --> J
+    E --> F
+    E --> G
+    F --> H
+    G --> H
+    D --> I
+    H --> K
+    I --> K
+    K --> J
+    J --> L
+    
+    %% Query Flow
+    B --> N
+    N --> O
+    O --> K
+    K --> P
+    P --> Q
+    Q --> R
+    R --> N
+    
+    %% Styling
+    style A fill:#e1f5fe
+    style B fill:#e1f5fe
+    style J fill:#e8f5e8
+    style N fill:#fff3e0
+    style R fill:#f3e5f5
+    
+    %% Labels
+    classDef azureService fill:#0078d4,stroke:#005a9e,stroke-width:2px,color:#fff
+    classDef aiService fill:#ff6b6b,stroke:#e55353,stroke-width:2px,color:#fff
+    classDef appService fill:#4ecdc4,stroke:#26a69a,stroke-width:2px,color:#fff
+    
+    class C,J,L,M azureService
+    class F,G,H,I,P aiService
+    class N,O,Q appService
+```
+
+**Architecture Components:**
+
+- **📄 Document Processing**: Azure Document Intelligence extracts structured content with layout preservation
+- **🤖 AI Services**: Multiple options (Azure OpenAI, Mistral, Cohere) for cost optimization
+- **🔍 Search Infrastructure**: Azure AI Search with vector storage and knowledge base
+- **💻 Application Layer**: Scalable App Service with modern React frontend
+- **📊 Response Generation**: RAG orchestration with visual citation support
+
 You can create an index using the AI Search portal's quick wizard for the multimodal scenario. Once the index is successfully created, you can integrate it with the app by running the following steps:
 
 - Run ```az login --use-device-code```
@@ -1349,16 +1439,24 @@ The following Azure services are used as part of this deployment. Ensure you ver
 2. **Azure AI Document Intelligence**  
    - Service used for processing and extracting information from documents. Review [pricing](https://azure.microsoft.com/pricing/details/ai-document-intelligence/). 
   
-3. Your provided:
+3. **Azure OpenAI Service**:
    - **LLM Deployment**: For running the large language model (LLM) for verbalization and used by the RAG orchestrator. 
    - **Embedding Model Deployment**: Used for creating embeddings for vector search and other tasks.   
    - Ensure you check the pricing for both LLM and embedding deployments.
-   - This sample currently supports gpt-4o, (AOAI) text-embedding-large, cohere-serverless-v3  
+   - This sample currently supports gpt-4o, (AOAI) text-embedding-large  
   
-4. **Azure Blob Storage Account**  
+4. **Cohere Serverless Models**  
+   - **Alternative LLM Option**: Cost-effective serverless deployment for text generation and embeddings
+   - **Regional Availability**: Currently supported in [5 regions](https://learn.microsoft.com/azure/ai-foundry/how-to/deploy-models-serverless-availability#cohere-models) only
+   - **Marketplace Subscription**: Requires Azure Marketplace subscription approval for deployment
+   - **Models Supported**: cohere-serverless-v3 for both chat completions and embeddings
+   - **Cost Benefits**: Pay-per-use model with no infrastructure management required
+   - Review [Cohere pricing](https://azure.microsoft.com/pricing/details/cognitive-services/openai-service/) details for cost optimization
+  
+5. **Azure Blob Storage Account**  
    - Used to store extracted images and other data. Verify the pricing for storage and associated operations. Review [pricing](https://azure.microsoft.com/pricing/details/storage/blobs/).
   
-5. **Azure App Service**  
+6. **Azure App Service**  
    - Used to host and run the application in the cloud. Review [pricing](https://azure.microsoft.com/pricing/details/app-service/windows/). 
 
 ### Role Mapping for the Application  
@@ -1375,7 +1473,7 @@ The following table maps the roles used by the application to their respective f
 
 ## End-to-end app diagram
 
-![image](https://github.com/user-attachments/assets/5984f2b7-e0d9-4d2c-a652-9a7b10085b79)
+*The comprehensive end-to-end application architecture diagram has been moved to the [Azure AI Search Portal](#azure-ai-search-portal-bring-your-own-index-and-resources) section for better context and visibility.*
 
 ## Troubleshooting
 - What is the region availability for Azure OpenAI service?  
