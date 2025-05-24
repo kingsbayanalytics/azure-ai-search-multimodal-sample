@@ -810,158 +810,542 @@ flowchart TD
 3. **Document Preprocessing**: Remove unnecessary pages before processing
 4. **Incremental Updates**: Only reprocess changed documents
 
-### Troubleshooting Document Processing
+##### 1. Strategy Selection: Use Simpler Strategies for Text-Heavy Documents
 
-#### Common Issues and Solutions
-
-**1. "Document Intelligence Analysis Failed"**
-```bash
-# Check document integrity
-python -c "
-import fitz
-try:
-    doc = fitz.open('data/your-book.pdf')
-    print(f'Document OK: {len(doc)} pages')
-except:
-    print('Document corrupted or unreadable')
-"
-
-# Solution: Re-download or repair PDF
-```
-
-**2. "Embedding Generation Timeout"**
-```bash
-# Check if document is too large
-ls -lh data/your-book.pdf
-
-# Solution: Split large documents or increase timeout
-# Edit src/backend/processfile.py, line ~380:
-# self.text_model = EmbeddingsClient(..., timeout=120)  # Increase timeout
-```
-
-**3. "Index Upload Failed - Field Validation Error"**
-```bash
-# Check for special characters in document content
-grep -P '[^\x00-\x7F]' data/your-book.pdf
-
-# Solution: Clean document or update field definitions
-```
-
-**4. "Insufficient Azure Credits/Quota"**
-```bash
-# Check current usage
-az consumption usage list --start-date $(date -d '1 month ago' +%Y-%m-%d)
-
-# Solution: Monitor and set up billing alerts
-az consumption budget create --resource-group <rg-name> --budget-name "DocumentProcessing" --amount 100
-```
-
-#### Processing Performance Optimization
-
-**1. Parallel Processing Configuration:**
 ```python
-# Edit src/backend/processfile.py for concurrent processing
-import asyncio
-import aiofiles
+class DocumentStrategySelector:
+    def __init__(self):
+        self.image_threshold = 0.15  # 15% image content triggers complex processing
+        self.text_density_threshold = 500  # characters per page
+        
+    def analyze_document_content(self, pdf_path):
+        """Analyze document to determine optimal processing strategy"""
+        doc = fitz.open(pdf_path)
+        total_pages = len(doc)
+        image_pages = 0
+        text_heavy_pages = 0
+        
+        for page_num, page in enumerate(doc):
+            # Check for images
+            images = page.get_images()
+            if len(images) > 0:
+                image_pages += 1
+            
+            # Check text density
+            text = page.get_text()
+            if len(text) > self.text_density_threshold:
+                text_heavy_pages += 1
+        
+        doc.close()
+        
+        # Calculate content ratios
+        image_ratio = image_pages / total_pages
+        text_ratio = text_heavy_pages / total_pages
+        
+        return {
+            'total_pages': total_pages,
+            'image_ratio': image_ratio,
+            'text_ratio': text_ratio,
+            'recommended_strategy': self._determine_strategy(image_ratio, text_ratio)
+        }
+    
+    def _determine_strategy(self, image_ratio, text_ratio):
+        """Determine optimal processing strategy based on content analysis"""
+        if image_ratio < 0.05 and text_ratio > 0.8:
+            return {
+                'strategy': 'text_only',
+                'document_processor': 'pymupdf_fast',  # Skip layout analysis
+                'image_processor': 'skip',             # No image processing
+                'embedding_strategy': 'local',         # Use free local embeddings
+                'estimated_cost_per_page': 0.001       # Minimal cost
+            }
+        elif image_ratio < self.image_threshold and text_ratio > 0.6:
+            return {
+                'strategy': 'text_optimized',
+                'document_processor': 'pymupdf_pdfplumber',  # Basic layout
+                'image_processor': 'mistral_ocr_only',       # Cost-effective OCR
+                'embedding_strategy': 'local',               # Free embeddings
+                'estimated_cost_per_page': 0.005
+            }
+        elif image_ratio > 0.3:
+            return {
+                'strategy': 'image_heavy',
+                'document_processor': 'full_layout_analysis',
+                'image_processor': 'hybrid_mistral_gpt4o',    # Full visual analysis
+                'embedding_strategy': 'azure_openai',        # High-quality embeddings
+                'estimated_cost_per_page': 0.025
+            }
+        else:
+            return {
+                'strategy': 'balanced',
+                'document_processor': 'pymupdf_pdfplumber',
+                'image_processor': 'mistral_ocr_selective_gpt4o',
+                'embedding_strategy': 'local_with_fallback',
+                'estimated_cost_per_page': 0.012
+            }
 
-class ProcessFile:
-    def __init__(self, ...):
-        self.max_concurrent_docs = 3  # Adjust based on quota limits
-        self.semaphore = asyncio.Semaphore(self.max_concurrent_docs)
+# Usage example
+def process_document_with_optimal_strategy(pdf_path):
+    selector = DocumentStrategySelector()
+    analysis = selector.analyze_document_content(pdf_path)
+    strategy = analysis['recommended_strategy']
+    
+    print(f"Document: {pdf_path}")
+    print(f"Pages: {analysis['total_pages']}")
+    print(f"Image ratio: {analysis['image_ratio']:.2%}")
+    print(f"Text ratio: {analysis['text_ratio']:.2%}")
+    print(f"Recommended strategy: {strategy['strategy']}")
+    print(f"Estimated cost: ${strategy['estimated_cost_per_page'] * analysis['total_pages']:.2f}")
+    
+    # Process with selected strategy
+    if strategy['strategy'] == 'text_only':
+        return process_text_only(pdf_path)
+    elif strategy['strategy'] == 'text_optimized':
+        return process_text_optimized(pdf_path)
+    else:
+        return process_full_multimodal(pdf_path)
 ```
 
-**2. Memory Optimization for Large Documents:**
+##### 2. Document Preprocessing: Remove Unnecessary Pages Before Processing
+
 ```python
-# Process documents in smaller chunks
-CHUNK_SIZE = 50  # Process 50 pages at a time
-for i in range(0, total_pages, CHUNK_SIZE):
-    chunk_pages = pages[i:i+CHUNK_SIZE]
-    await self._process_page_chunk(chunk_pages)
+import numpy as np
+from PIL import Image
+import io
+
+class DocumentPreprocessor:
+    def __init__(self):
+        self.blank_threshold = 0.95  # 95% whitespace considered blank
+        self.min_text_length = 50    # Minimum characters for meaningful content
+        self.cover_page_indicators = ['cover', 'title page', 'front matter']
+        
+    def analyze_and_filter_pages(self, pdf_path):
+        """Remove blank pages, covers, and other unnecessary content"""
+        doc = fitz.open(pdf_path)
+        pages_to_keep = []
+        removed_pages = {
+            'blank_pages': [],
+            'cover_pages': [],
+            'toc_pages': [],
+            'low_content_pages': []
+        }
+        
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            
+            # Check if page should be kept
+            keep_page, reason = self._should_keep_page(page, page_num, len(doc))
+            
+            if keep_page:
+                pages_to_keep.append(page_num)
+            else:
+                removed_pages[reason].append(page_num)
+        
+        doc.close()
+        
+        # Create filtered document
+        filtered_path = self._create_filtered_document(pdf_path, pages_to_keep)
+        
+        return {
+            'original_pages': len(doc),
+            'filtered_pages': len(pages_to_keep),
+            'pages_removed': len(doc) - len(pages_to_keep),
+            'filtered_document_path': filtered_path,
+            'removed_pages_detail': removed_pages,
+            'cost_savings': self._calculate_cost_savings(len(doc) - len(pages_to_keep))
+        }
+    
+    def _should_keep_page(self, page, page_num, total_pages):
+        """Determine if a page should be kept based on content analysis"""
+        
+        # Check for blank pages
+        if self._is_blank_page(page):
+            return False, 'blank_pages'
+        
+        # Check for cover pages (first 3 pages)
+        if page_num < 3 and self._is_cover_page(page):
+            return False, 'cover_pages'
+        
+        # Check for table of contents (usually in first 10% of document)
+        if page_num < total_pages * 0.1 and self._is_toc_page(page):
+            return False, 'toc_pages'
+        
+        # Check for low content pages
+        if self._is_low_content_page(page):
+            return False, 'low_content_pages'
+        
+        return True, None
+    
+    def _is_blank_page(self, page):
+        """Detect blank or nearly blank pages"""
+        # Method 1: Text-based detection
+        text = page.get_text().strip()
+        if len(text) < 10:  # Very little text
+            # Method 2: Visual analysis
+            pix = page.get_pixmap(matrix=fitz.Matrix(0.5, 0.5))  # Lower resolution for speed
+            img_data = pix.tobytes("png")
+            img = Image.open(io.BytesIO(img_data)).convert('L')  # Convert to grayscale
+            
+            # Calculate percentage of white pixels
+            img_array = np.array(img)
+            white_pixels = np.sum(img_array > 240)  # Pixels close to white
+            total_pixels = img_array.size
+            white_ratio = white_pixels / total_pixels
+            
+            return white_ratio > self.blank_threshold
+        
+        return False
+    
+    def _is_cover_page(self, page):
+        """Detect cover pages, title pages, and front matter"""
+        text = page.get_text().lower()
+        
+        # Common cover page indicators
+        cover_keywords = [
+            'title page', 'cover', 'front matter', 'published by',
+            'copyright', '©', 'all rights reserved', 'isbn',
+            'first edition', 'second edition', 'third edition'
+        ]
+        
+        keyword_count = sum(1 for keyword in cover_keywords if keyword in text)
+        
+        # If multiple cover indicators and short text, likely a cover
+        if keyword_count >= 2 and len(text) < 500:
+            return True
+            
+        # Check for typical cover page layout (centered text, few lines)
+        lines = text.split('\n')
+        non_empty_lines = [line.strip() for line in lines if line.strip()]
+        
+        if len(non_empty_lines) < 10 and any(keyword in text for keyword in cover_keywords):
+            return True
+            
+        return False
+    
+    def _is_toc_page(self, page):
+        """Detect table of contents pages"""
+        text = page.get_text().lower()
+        
+        # TOC indicators
+        toc_keywords = [
+            'table of contents', 'contents', 'chapter', 'section',
+            'page', 'introduction', 'conclusion', 'appendix'
+        ]
+        
+        # Look for dot leaders (.....) common in TOCs
+        if '.....' in text or '......' in text:
+            return True
+            
+        # Check for chapter/section numbering patterns
+        lines = text.split('\n')
+        numbered_lines = 0
+        for line in lines:
+            if any(pattern in line for pattern in ['chapter ', 'section ', ') ', '. ']):
+                numbered_lines += 1
+        
+        # If many numbered lines and TOC keywords, likely TOC
+        if numbered_lines > 5 and any(keyword in text for keyword in toc_keywords):
+            return True
+            
+        return False
+    
+    def _is_low_content_page(self, page):
+        """Detect pages with minimal useful content"""
+        text = page.get_text().strip()
+        
+        # Check text length
+        if len(text) < self.min_text_length:
+            return True
+        
+        # Check for pages that are just headers/footers
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+        if len(lines) < 3:  # Very few lines of text
+            return True
+            
+        # Check for advertisement pages
+        ad_keywords = ['advertisement', 'sponsored', 'buy now', 'subscribe']
+        if any(keyword in text.lower() for keyword in ad_keywords):
+            return True
+            
+        return False
+    
+    def _create_filtered_document(self, original_path, pages_to_keep):
+        """Create new PDF with only the selected pages"""
+        original_doc = fitz.open(original_path)
+        filtered_doc = fitz.open()
+        
+        for page_num in pages_to_keep:
+            filtered_doc.insert_pdf(original_doc, from_page=page_num, to_page=page_num)
+        
+        # Save filtered document
+        base_name = original_path.replace('.pdf', '')
+        filtered_path = f"{base_name}_filtered.pdf"
+        filtered_doc.save(filtered_path)
+        
+        original_doc.close()
+        filtered_doc.close()
+        
+        return filtered_path
+    
+    def _calculate_cost_savings(self, pages_removed):
+        """Calculate cost savings from removing pages"""
+        cost_per_page = 0.0015  # $1.50 per 1000 pages for Document Intelligence
+        return pages_removed * cost_per_page
+
+# Usage example
+def preprocess_document(pdf_path):
+    preprocessor = DocumentPreprocessor()
+    result = preprocessor.analyze_and_filter_pages(pdf_path)
+    
+    print(f"Original pages: {result['original_pages']}")
+    print(f"Filtered pages: {result['filtered_pages']}")
+    print(f"Pages removed: {result['pages_removed']}")
+    print(f"Cost savings: ${result['cost_savings']:.4f}")
+    print(f"Filtered document: {result['filtered_document_path']}")
+    
+    return result['filtered_document_path']
 ```
 
-**3. Network Optimization:**
-```bash
-# Increase timeout for slow connections
-export AZURE_CLIENT_TIMEOUT=300
-export AZURE_RETRY_ATTEMPTS=5
-```
+##### 3. Incremental Updates: Only Reprocess Changed Documents
 
-#### Validation and Quality Assurance
-
-**1. Post-Processing Validation:**
-```bash
-# Verify index was created successfully
-az search index show --index-name "book-collection-index" --service-name <search-service>
-
-# Check document count
-az search index statistics --index-name "book-collection-index" --service-name <search-service>
-```
-
-**2. Content Quality Verification:**
 ```python
-# Test search functionality with sample queries
-import requests
+import hashlib
+import json
+import os
+from datetime import datetime
+from pathlib import Path
 
-test_query = {
-    "search": "chapter 1 introduction",
-    "queryType": "semantic",
-    "semanticConfiguration": "semanticconfig",
-    "queryLanguage": "en-us",
-    "count": 5
-}
+class IncrementalDocumentProcessor:
+    def __init__(self, cache_dir=".document_cache"):
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(exist_ok=True)
+        self.index_cache_file = self.cache_dir / "document_index.json"
+        self.document_cache = self._load_document_cache()
+        
+    def _load_document_cache(self):
+        """Load existing document processing cache"""
+        if self.index_cache_file.exists():
+            with open(self.index_cache_file, 'r') as f:
+                return json.load(f)
+        return {}
+    
+    def _save_document_cache(self):
+        """Save document processing cache"""
+        with open(self.index_cache_file, 'w') as f:
+            json.dump(self.document_cache, f, indent=2)
+    
+    def _calculate_file_hash(self, file_path):
+        """Calculate SHA256 hash of file for change detection"""
+        hash_sha256 = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_sha256.update(chunk)
+        return hash_sha256.hexdigest()
+    
+    def _get_file_metadata(self, file_path):
+        """Get file metadata for change detection"""
+        stat = os.stat(file_path)
+        return {
+            'size': stat.st_size,
+            'modified_time': stat.st_mtime,
+            'file_hash': self._calculate_file_hash(file_path),
+            'last_processed': datetime.now().isoformat()
+        }
+    
+    def detect_document_changes(self, document_path):
+        """Detect if document has changed since last processing"""
+        doc_key = str(Path(document_path).resolve())
+        current_metadata = self._get_file_metadata(document_path)
+        
+        if doc_key not in self.document_cache:
+            return {
+                'changed': True,
+                'reason': 'new_document',
+                'action': 'full_process'
+            }
+        
+        cached_metadata = self.document_cache[doc_key]
+        
+        # Check if file has been modified
+        if cached_metadata['file_hash'] != current_metadata['file_hash']:
+            return {
+                'changed': True,
+                'reason': 'content_modified',
+                'action': 'full_reprocess',
+                'previous_hash': cached_metadata['file_hash'],
+                'current_hash': current_metadata['file_hash']
+            }
+        
+        # Check if processing succeeded previously
+        if cached_metadata.get('processing_status') != 'completed':
+            return {
+                'changed': True,
+                'reason': 'previous_processing_failed',
+                'action': 'retry_process'
+            }
+        
+        return {
+            'changed': False,
+            'reason': 'no_changes',
+            'action': 'skip_processing',
+            'last_processed': cached_metadata['last_processed']
+        }
+    
+    def batch_detect_changes(self, document_directory):
+        """Detect changes across multiple documents"""
+        doc_dir = Path(document_directory)
+        pdf_files = list(doc_dir.glob("**/*.pdf"))
+        
+        changed_docs = []
+        unchanged_docs = []
+        new_docs = []
+        
+        for pdf_file in pdf_files:
+            change_info = self.detect_document_changes(pdf_file)
+            
+            if change_info['changed']:
+                if change_info['reason'] == 'new_document':
+                    new_docs.append({
+                        'path': str(pdf_file),
+                        'info': change_info
+                    })
+                else:
+                    changed_docs.append({
+                        'path': str(pdf_file),
+                        'info': change_info
+                    })
+            else:
+                unchanged_docs.append({
+                    'path': str(pdf_file),
+                    'info': change_info
+                })
+        
+        return {
+            'new_documents': new_docs,
+            'changed_documents': changed_docs,
+            'unchanged_documents': unchanged_docs,
+            'total_processing_needed': len(new_docs) + len(changed_docs),
+            'total_documents': len(pdf_files)
+        }
+    
+    def process_with_change_detection(self, document_path, force_reprocess=False):
+        """Process document only if changed, with caching"""
+        doc_key = str(Path(document_path).resolve())
+        
+        if not force_reprocess:
+            change_info = self.detect_document_changes(document_path)
+            
+            if not change_info['changed']:
+                print(f"Skipping {document_path}: {change_info['reason']}")
+                return self._load_cached_results(doc_key)
+        
+        # Process the document
+        try:
+            print(f"Processing {document_path}...")
+            results = self._process_document(document_path)
+            
+            # Update cache with successful processing
+            self.document_cache[doc_key] = {
+                **self._get_file_metadata(document_path),
+                'processing_status': 'completed',
+                'results_cache_path': self._save_processing_results(doc_key, results)
+            }
+            self._save_document_cache()
+            
+            return results
+            
+        except Exception as e:
+            # Update cache with failed processing
+            self.document_cache[doc_key] = {
+                **self._get_file_metadata(document_path),
+                'processing_status': 'failed',
+                'error_message': str(e)
+            }
+            self._save_document_cache()
+            raise
+    
+    def _process_document(self, document_path):
+        """Actual document processing logic"""
+        # This would call your actual processing pipeline
+        # Placeholder for demonstration
+        return {
+            'document_path': document_path,
+            'chunks': [],
+            'embeddings': [],
+            'processing_time': 0,
+            'processed_at': datetime.now().isoformat()
+        }
+    
+    def _save_processing_results(self, doc_key, results):
+        """Save processing results to cache"""
+        cache_file = self.cache_dir / f"{hashlib.md5(doc_key.encode()).hexdigest()}.json"
+        with open(cache_file, 'w') as f:
+            json.dump(results, f, indent=2)
+        return str(cache_file)
+    
+    def _load_cached_results(self, doc_key):
+        """Load cached processing results"""
+        if doc_key in self.document_cache:
+            cache_path = self.document_cache[doc_key].get('results_cache_path')
+            if cache_path and os.path.exists(cache_path):
+                with open(cache_path, 'r') as f:
+                    return json.load(f)
+        return None
+    
+    def cleanup_orphaned_cache(self, document_directory):
+        """Clean up cache entries for deleted documents"""
+        doc_dir = Path(document_directory)
+        existing_files = {str(f.resolve()) for f in doc_dir.glob("**/*.pdf")}
+        
+        orphaned_keys = []
+        for doc_key in list(self.document_cache.keys()):
+            if doc_key not in existing_files:
+                orphaned_keys.append(doc_key)
+        
+        for key in orphaned_keys:
+            # Remove cache file
+            cache_path = self.document_cache[key].get('results_cache_path')
+            if cache_path and os.path.exists(cache_path):
+                os.remove(cache_path)
+            
+            # Remove from index
+            del self.document_cache[key]
+        
+        self._save_document_cache()
+        return len(orphaned_keys)
 
-response = requests.post(f"{search_endpoint}/indexes/{index_name}/docs/search", 
-                        json=test_query, headers=headers)
-print(f"Search results: {len(response.json()['value'])} documents found")
-```
-
-**3. Citation Functionality Test:**
-```python
-# Verify visual citations are working
-test_citations = response.json()['value'][0].get('locationMetadata')
-if test_citations and 'boundingPolygons' in test_citations:
-    print("✅ Visual citations properly configured")
-else:
-    print("❌ Visual citations missing - check processing strategy")
-```
-
-#### Recovery and Rollback Procedures
-
-**1. Index Recovery:**
-```bash
-# Backup current index definition
-az search index show --index-name "book-collection-index" > backup-index-schema.json
-
-# Delete corrupted index
-az search index delete --index-name "book-collection-index" --yes
-
-# Recreate from backup
-az search index create --index-definition backup-index-schema.json
-```
-
-**2. Document Reprocessing:**
-```bash
-# Reprocess specific failed documents
-scripts/prepdocs.ps1 -DocumentPath "data/books/specific-book.pdf" -ForceReprocess $true
-
-# Clean and restart full processing
-rm -rf data/.processing_cache/
-scripts/prepdocs.ps1 -IndexerStrategy "indexer-image-verbal"
-```
-
-**3. Cost Management Recovery:**
-```bash
-# Set emergency budget alerts
-az consumption budget create \
-    --budget-name "EmergencyStop" \
-    --amount 50 \
-    --time-grain "Monthly" \
-    --notifications '[{
-        "enabled": true,
-        "operator": "GreaterThan",
-        "threshold": 80,
-        "contactEmails": ["admin@company.com"]
-    }]'
+# Usage example
+def process_documents_incrementally(document_directory):
+    processor = IncrementalDocumentProcessor()
+    
+    # Detect changes across all documents
+    changes = processor.batch_detect_changes(document_directory)
+    
+    print(f"Total documents: {changes['total_documents']}")
+    print(f"New documents: {len(changes['new_documents'])}")
+    print(f"Changed documents: {len(changes['changed_documents'])}")
+    print(f"Unchanged documents: {len(changes['unchanged_documents'])}")
+    print(f"Processing needed: {changes['total_processing_needed']}")
+    
+    # Calculate cost savings
+    pages_saved = len(changes['unchanged_documents']) * 100  # Assume 100 pages average
+    cost_savings = pages_saved * 0.0015  # $1.50 per 1000 pages
+    print(f"Estimated cost savings: ${cost_savings:.2f}")
+    
+    # Process only changed/new documents
+    results = []
+    for doc_info in changes['new_documents'] + changes['changed_documents']:
+        try:
+            result = processor.process_with_change_detection(doc_info['path'])
+            results.append(result)
+        except Exception as e:
+            print(f"Failed to process {doc_info['path']}: {e}")
+    
+    # Cleanup orphaned cache entries
+    orphaned_count = processor.cleanup_orphaned_cache(document_directory)
+    print(f"Cleaned up {orphaned_count} orphaned cache entries")
+    
+    return results
 ```
 
 ---
@@ -2173,5 +2557,159 @@ curl -X POST "https://your-existing-search-service.search.windows.net/indexes/bo
         }],
         "select": "id,content,page_number,locationMetadata"
     }'
+```
+
+### Troubleshooting Document Processing
+
+#### Common Issues and Solutions
+
+**1. "Document Intelligence Analysis Failed"**
+```bash
+# Check document integrity
+python -c "
+import fitz
+try:
+    doc = fitz.open('data/your-book.pdf')
+    print(f'Document OK: {len(doc)} pages')
+except:
+    print('Document corrupted or unreadable')
+"
+
+# Solution: Re-download or repair PDF
+```
+
+**2. "Embedding Generation Timeout"**
+```bash
+# Check if document is too large
+ls -lh data/your-book.pdf
+
+# Solution: Split large documents or increase timeout
+# Edit src/backend/processfile.py, line ~380:
+# self.text_model = EmbeddingsClient(..., timeout=120)  # Increase timeout
+```
+
+**3. "Index Upload Failed - Field Validation Error"**
+```bash
+# Check for special characters in document content
+grep -P '[^\x00-\x7F]' data/your-book.pdf
+
+# Solution: Clean document or update field definitions
+```
+
+**4. "Insufficient Azure Credits/Quota"**
+```bash
+# Check current usage
+az consumption usage list --start-date $(date -d '1 month ago' +%Y-%m-%d)
+
+# Solution: Monitor and set up billing alerts
+az consumption budget create --resource-group <rg-name> --budget-name "DocumentProcessing" --amount 100
+```
+
+#### Processing Performance Optimization
+
+**1. Parallel Processing Configuration:**
+```python
+# Edit src/backend/processfile.py for concurrent processing
+import asyncio
+import aiofiles
+
+class ProcessFile:
+    def __init__(self, ...):
+        self.max_concurrent_docs = 3  # Adjust based on quota limits
+        self.semaphore = asyncio.Semaphore(self.max_concurrent_docs)
+```
+
+**2. Memory Optimization for Large Documents:**
+```python
+# Process documents in smaller chunks
+CHUNK_SIZE = 50  # Process 50 pages at a time
+for i in range(0, total_pages, CHUNK_SIZE):
+    chunk_pages = pages[i:i+CHUNK_SIZE]
+    await self._process_page_chunk(chunk_pages)
+```
+
+**3. Network Optimization:**
+```bash
+# Increase timeout for slow connections
+export AZURE_CLIENT_TIMEOUT=300
+export AZURE_RETRY_ATTEMPTS=5
+```
+
+#### Validation and Quality Assurance
+
+**1. Post-Processing Validation:**
+```bash
+# Verify index was created successfully
+az search index show --index-name "book-collection-index" --service-name <search-service>
+
+# Check document count
+az search index statistics --index-name "book-collection-index" --service-name <search-service>
+```
+
+**2. Content Quality Verification:**
+```python
+# Test search functionality with sample queries
+import requests
+
+test_query = {
+    "search": "chapter 1 introduction",
+    "queryType": "semantic",
+    "semanticConfiguration": "semanticconfig",
+    "queryLanguage": "en-us",
+    "count": 5
+}
+
+response = requests.post(f"{search_endpoint}/indexes/{index_name}/docs/search", 
+                        json=test_query, headers=headers)
+print(f"Search results: {len(response.json()['value'])} documents found")
+```
+
+**3. Citation Functionality Test:**
+```python
+# Verify visual citations are working
+test_citations = response.json()['value'][0].get('locationMetadata')
+if test_citations and 'boundingPolygons' in test_citations:
+    print("✅ Visual citations properly configured")
+else:
+    print("❌ Visual citations missing - check processing strategy")
+```
+
+#### Recovery and Rollback Procedures
+
+**1. Index Recovery:**
+```bash
+# Backup current index definition
+az search index show --index-name "book-collection-index" > backup-index-schema.json
+
+# Delete corrupted index
+az search index delete --index-name "book-collection-index" --yes
+
+# Recreate from backup
+az search index create --index-definition backup-index-schema.json
+```
+
+**2. Document Reprocessing:**
+```bash
+# Reprocess specific failed documents
+scripts/prepdocs.ps1 -DocumentPath "data/books/specific-book.pdf" -ForceReprocess $true
+
+# Clean and restart full processing
+rm -rf data/.processing_cache/
+scripts/prepdocs.ps1 -IndexerStrategy "indexer-image-verbal"
+```
+
+**3. Cost Management Recovery:**
+```bash
+# Set emergency budget alerts
+az consumption budget create \
+    --budget-name "EmergencyStop" \
+    --amount 50 \
+    --time-grain "Monthly" \
+    --notifications '[{
+        "enabled": true,
+        "operator": "GreaterThan",
+        "threshold": 80,
+        "contactEmails": ["admin@company.com"]
+    }]'
 ```
 
