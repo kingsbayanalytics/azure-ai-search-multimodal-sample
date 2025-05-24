@@ -504,6 +504,8 @@ flowchart TD
 
 #### 2.2 Cost-Effective Python Replication Strategy
 
+Understanding the Azure Cognitive Search Skills pipeline enables you to replicate the same functionality using open-source Python libraries and cost-effective AI services, potentially reducing processing costs by 70-85% while maintaining comparable quality. This section provides a complete alternative implementation that mirrors the Microsoft strategy using free document processing libraries (PyMuPDF, PDFPlumber), cost-effective image analysis (Mistral OCR + selective GPT-4o), and local embedding generation (SentenceTransformers). The approach maintains the same document structure, field mappings, and search capabilities as the Azure Skills pipeline, but with significantly lower operational costs and greater control over the processing pipeline.
+
 ##### Alternative Technology Stack
 
 **Document Processing Alternatives:**
