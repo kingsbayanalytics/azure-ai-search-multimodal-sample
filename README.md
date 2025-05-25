@@ -1,5 +1,4 @@
 # Azure AI Search Multimodal RAG Demo
-[![Open in GitHub Codespaces](https://img.shields.io/static/v1?style=for-the-badge&label=GitHub+Codespaces&message=Open&color=brightgreen&logo=github)](https://github.com/codespaces/new?hide_repo_select=true&ref=main&repo=984945158&skip_quickstart=true)
 
 ## Table of Contents
 
@@ -268,6 +267,43 @@ NOTE: It may take 5-10 minutes after you see 'SUCCESS' for the application to be
   - **On Windows** Run ```scripts\prepdocs.ps1 -IndexerStrategy indexer-image-verbal ```
   - **On Linux** Run ```scripts\prepdocs.sh indexer-image-verbal ```
 
+#### Selective Document Processing
+
+You can now process specific folders or files within the `data` directory instead of processing all documents:
+
+**Process a specific folder:**
+- **On Windows:** ```scripts\prepdocs.ps1 -DataPath "books"```
+- **On Linux:** ```scripts/prepdocs.sh self-multimodal-embedding "books"```
+
+**Process a specific file:**
+- **On Windows:** ```scripts\prepdocs.ps1 -DataPath "books/technical-manual.pdf"```
+- **On Linux:** ```scripts/prepdocs.sh self-multimodal-embedding "books/technical-manual.pdf"```
+
+**Process with different indexer strategy:**
+- **On Windows:** ```scripts\prepdocs.ps1 -IndexerStrategy "indexer-image-verbal" -DataPath "reports"```
+- **On Linux:** ```scripts/prepdocs.sh indexer-image-verbal "reports"```
+
+**Supported file types:** PDF, DOCX, DOC, TXT (though PDF is recommended for best results)
+
+**Path options:**
+- Relative paths (relative to `data/` directory): `"books"`, `"reports/quarterly.pdf"`
+- Absolute paths: `"/full/path/to/document.pdf"`
+- Single files or entire directories (including subdirectories)
+
+**Examples:**
+```bash
+# Process only books folder
+scripts/prepdocs.sh self-multimodal-embedding "books"
+
+# Process a specific report
+scripts/prepdocs.sh indexer-image-verbal "reports/annual-report-2024.pdf"
+
+# Process all documents (default behavior)
+scripts/prepdocs.sh
+```
+
+For detailed documentation on selective document processing, see [Selective Document Processing Guide](docs/notepads/selective-document-processing.md).
+
 ---
 
 ## Processing New Documents and Creating Additional Indexes
@@ -359,26 +395,44 @@ ls -la data/books/
 
 **On Windows:**
 ```powershell
-# Basic processing with default strategy
+# Basic processing with default strategy (all documents in data/)
 scripts\prepdocs.ps1
+
+# Process specific folder
+scripts\prepdocs.ps1 -DataPath "books"
+
+# Process specific file
+scripts\prepdocs.ps1 -DataPath "books/technical-manual.pdf"
 
 # Or with specific indexer strategy for better image processing
 scripts\prepdocs.ps1 -IndexerStrategy "indexer-image-verbal"
 
+# Combine strategy and path selection
+scripts\prepdocs.ps1 -IndexerStrategy "indexer-image-verbal" -DataPath "reports"
+
 # For documents with lots of images, use multimodal embedding strategy
-scripts\prepdocs.ps1 -IndexerStrategy "self-multimodal-embedding"
+scripts\prepdocs.ps1 -IndexerStrategy "self-multimodal-embedding" -DataPath "books"
 ```
 
 **On Linux:**
 ```bash
-# Basic processing
+# Basic processing (all documents in data/)
 scripts/prepdocs.sh
+
+# Process specific folder
+scripts/prepdocs.sh self-multimodal-embedding "books"
+
+# Process specific file
+scripts/prepdocs.sh self-multimodal-embedding "books/technical-manual.pdf"
 
 # With specific strategy
 scripts/prepdocs.sh indexer-image-verbal
 
+# Combine strategy and path selection
+scripts/prepdocs.sh indexer-image-verbal "reports"
+
 # For image-heavy documents
-scripts/prepdocs.sh self-multimodal-embedding
+scripts/prepdocs.sh self-multimodal-embedding "books"
 ```
 
 #### 2. Understanding Indexer Strategies

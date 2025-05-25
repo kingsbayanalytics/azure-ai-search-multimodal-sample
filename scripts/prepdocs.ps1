@@ -1,5 +1,6 @@
 param(
-    [string]$IndexerStrategy = 'self-multimodal-embedding'
+    [string]$IndexerStrategy = 'self-multimodal-embedding',
+    [string]$DataPath = ''
 )
 
 # Set the parent of the script as the current location.
@@ -46,4 +47,14 @@ Start-Process -FilePath $venvPythonPath -ArgumentList "-m pip install -r $backen
 
 Write-Host 'Run the document preparation script'
 $args_indexer_strategy = $IndexerStrategy
-Start-Process -FilePath $venvPythonPath -ArgumentList "$backendPath/prepdocs.py --source files --indexer_strategy $args_indexer_strategy" -Wait -NoNewWindow
+
+# Build the command with optional data_path parameter
+if ($DataPath -ne '') {
+    Write-Host "Processing documents from: $DataPath"
+    $pythonArgs = "$backendPath/prepdocs.py --source files --indexer_strategy $args_indexer_strategy --data_path `"$DataPath`""
+} else {
+    Write-Host "Processing all documents in data directory"
+    $pythonArgs = "$backendPath/prepdocs.py --source files --indexer_strategy $args_indexer_strategy"
+}
+
+Start-Process -FilePath $venvPythonPath -ArgumentList $pythonArgs -Wait -NoNewWindow

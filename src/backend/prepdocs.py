@@ -28,6 +28,7 @@ import argparse
 # Load environment variables from .env file
 load_dotenv()
 
+
 def load_environment_variables():
     """Loads environment variables from the .env file."""
     required_vars = [
@@ -67,9 +68,27 @@ def get_blob_storage_credentials():
     return storage_account_name, blob_container_name, sas_token
 
 
-async def main(source: str, indexer_Strategy: Optional[str] = None):
+async def main(
+    source: str, indexer_Strategy: Optional[str] = None, data_path: Optional[str] = None
+):
     load_environment_variables()
     documents_to_process_folder, documents_output_folder = setup_directories()
+
+    # If data_path is specified, use it instead of the default documents folder
+    if data_path:
+        # Handle both absolute and relative paths
+        if os.path.isabs(data_path):
+            target_path = data_path
+        else:
+            # Relative to the data directory
+            target_path = os.path.join(documents_to_process_folder, data_path)
+
+        # Validate the path exists
+        if not os.path.exists(target_path):
+            raise ValueError(f"Specified data path does not exist: {target_path}")
+
+        documents_to_process_folder = target_path
+        print(f"Processing documents from: {documents_to_process_folder}")
 
     tokenCredential = DefaultAzureCredential()
 
@@ -188,24 +207,77 @@ async def main(source: str, indexer_Strategy: Optional[str] = None):
 async def process_files(
     process_file, documents_to_process_folder, documents_output_folder
 ):
-    document_paths = glob.glob(os.path.join(documents_to_process_folder, "*.*"))
-    for doc_path in document_paths:
-        print(f"Processing file: {doc_path}")
-        async with aiofiles.open(doc_path, "rb") as f:
-            file_bytes = await f.read()
-            await process_file.process_file(
-                file_bytes,
-                os.path.basename(doc_path),
-                os.environ["SEARCH_INDEX_NAME"],
-            )
+    """
+    Process files from the specified folder or file path.
+    Supports both individual files and directories (including subdirectories).
+    """
+    document_paths = []
 
-            # Copy the document to documents_output_folder
-            destination_path = os.path.join(
-                documents_output_folder, os.path.basename(doc_path)
-            )
-            with open(doc_path, "rb") as src_file:
-                with open(destination_path, "wb") as dest_file:
-                    dest_file.write(src_file.read())
+    if os.path.isfile(documents_to_process_folder):
+        # Single file specified
+        if documents_to_process_folder.lower().endswith(
+            (".pdf", ".docx", ".doc", ".txt")
+        ):
+            document_paths = [documents_to_process_folder]
+            print(f"Processing single file: {documents_to_process_folder}")
+        else:
+            print(f"Skipping unsupported file type: {documents_to_process_folder}")
+            return
+    elif os.path.isdir(documents_to_process_folder):
+        # Directory specified - search for all supported files recursively
+        supported_extensions = ["*.pdf", "*.docx", "*.doc", "*.txt"]
+        for extension in supported_extensions:
+            # Use recursive glob to find files in subdirectories
+            pattern = os.path.join(documents_to_process_folder, "**", extension)
+            document_paths.extend(glob.glob(pattern, recursive=True))
+
+        # Also check for files directly in the specified directory
+        for extension in supported_extensions:
+            pattern = os.path.join(documents_to_process_folder, extension)
+            document_paths.extend(glob.glob(pattern))
+
+        # Remove duplicates and sort
+        document_paths = sorted(list(set(document_paths)))
+        print(
+            f"Found {len(document_paths)} documents to process in: {documents_to_process_folder}"
+        )
+    else:
+        raise ValueError(f"Invalid path: {documents_to_process_folder}")
+
+    if not document_paths:
+        print("No supported documents found to process.")
+        return
+
+    # Display files that will be processed
+    print("Documents to be processed:")
+    for i, doc_path in enumerate(document_paths, 1):
+        relative_path = os.path.relpath(doc_path, documents_to_process_folder)
+        print(f"  {i}. {relative_path}")
+
+    # Process each document
+    for doc_path in document_paths:
+        print(f"\nProcessing file: {doc_path}")
+        try:
+            async with aiofiles.open(doc_path, "rb") as f:
+                file_bytes = await f.read()
+                await process_file.process_file(
+                    file_bytes,
+                    os.path.basename(doc_path),
+                    os.environ["SEARCH_INDEX_NAME"],
+                )
+
+                # Copy the document to documents_output_folder
+                destination_path = os.path.join(
+                    documents_output_folder, os.path.basename(doc_path)
+                )
+                with open(doc_path, "rb") as src_file:
+                    with open(destination_path, "wb") as dest_file:
+                        dest_file.write(src_file.read())
+
+                print(f"✅ Successfully processed: {os.path.basename(doc_path)}")
+        except Exception as e:
+            print(f"❌ Error processing {doc_path}: {str(e)}")
+            continue
 
 
 async def process_blobs(
@@ -251,6 +323,10 @@ if __name__ == "__main__":
         "--indexer_strategy",
         choices=["indexer-image-verbal", "self-multimodal-embedding"],
     )
+    parser.add_argument(
+        "--data_path",
+        help="Specify a path to a specific folder or file within the data directory.",
+    )
     args = parser.parse_args()
 
-    asyncio.run(main(args.source, args.indexer_strategy))
+    asyncio.run(main(args.source, args.indexer_strategy, args.data_path))
