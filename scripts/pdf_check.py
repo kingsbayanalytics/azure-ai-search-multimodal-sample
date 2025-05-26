@@ -593,6 +593,44 @@ class PDFAnalyzer:
                 f"Average Cost per Document: ${summary['total_cost'] / summary['valid_files']:.4f}"
             )
 
+        # Enhanced per-file cost breakdown
+        if (
+            hasattr(self, "_show_per_file_costs")
+            and self._show_per_file_costs
+            and results["files_analyzed"]
+        ):
+            valid_files = [
+                analysis
+                for analysis in results["files_analyzed"]
+                if analysis["integrity"]["integrity_status"] == "valid"
+            ]
+
+            if valid_files:
+                print(f"\n💰 Per-File Cost Breakdown")
+                print(f"{'='*80}")
+                print(
+                    f"{'File Name':<30} {'Pages':<6} {'Images':<7} {'Size(MB)':<8} {'Cost($)':<8}"
+                )
+                print(f"{'─'*30} {'─'*6} {'─'*7} {'─'*8} {'─'*8}")
+
+                for analysis in valid_files:
+                    integrity = analysis["integrity"]
+                    costs = analysis["costs"]
+                    file_name = integrity["file_name"]
+                    if len(file_name) > 29:
+                        file_name = file_name[:26] + "..."
+
+                    print(
+                        f"{file_name:<30} {integrity['pages']:<6} {costs['actual_images']:<7} "
+                        f"{integrity['file_size_mb']:<8.1f} {costs['total_cost']:<8.4f}"
+                    )
+
+                print(f"{'─'*30} {'─'*6} {'─'*7} {'─'*8} {'─'*8}")
+                print(
+                    f"{'TOTAL':<30} {summary['total_pages']:<6} {'':<7} "
+                    f"{summary['total_size_mb']:<8.1f} {summary['total_cost']:<8.2f}"
+                )
+
         if detailed and results["files_analyzed"]:
             print(f"\n📋 Individual File Details")
             print(f"{'─'*60}")
@@ -603,8 +641,25 @@ class PDFAnalyzer:
                 print(f"{status_icon} {integrity['file_name']}")
                 if integrity["integrity_status"] == "valid":
                     print(
-                        f"   Pages: {integrity['pages']}, Size: {integrity['file_size_mb']:.1f}MB, Cost: ${costs['total_cost']:.4f}"
+                        f"   Pages: {integrity['pages']}, Size: {integrity['file_size_mb']:.1f}MB, "
+                        f"Images: {costs['actual_images']}, Cost: ${costs['total_cost']:.4f}"
                     )
+                    # Show cost breakdown for each file if detailed
+                    if (
+                        hasattr(self, "_show_per_file_costs")
+                        and self._show_per_file_costs
+                    ):
+                        if costs["strategy"] != "optimized":
+                            print(
+                                f"     Doc Intelligence: ${costs['document_intelligence_cost']:.4f}"
+                            )
+                        print(
+                            f"     Image Processing: ${costs['image_processing_cost']:.4f}"
+                        )
+                        if costs["strategy"] != "optimized":
+                            print(
+                                f"     Text Embeddings: ${costs['embedding_cost']:.4f}"
+                            )
                 else:
                     print(f"   Status: {integrity['integrity_status']}")
                     if integrity["error_message"]:
@@ -621,6 +676,7 @@ Examples:
   python scripts/pdf_check.py                                    # Check all PDFs in data/
   python scripts/pdf_check.py --file data/books/mybook.pdf       # Check specific file
   python scripts/pdf_check.py --directory data/books/            # Check specific directory
+  python scripts/pdf_check.py --directory data/books/ --per-file-costs  # Show detailed per-file cost table
   python scripts/pdf_check.py --strategy optimized               # Use cost-optimized strategy
   python scripts/pdf_check.py --summary                          # Show summary only
   python scripts/pdf_check.py --output analysis_report.json     # Save results to JSON
@@ -660,9 +716,19 @@ Examples:
         help="Manually specify number of figures/charts for cost estimation (overrides detection)",
     )
 
+    parser.add_argument(
+        "--per-file-costs",
+        "-p",
+        action="store_true",
+        help="Show detailed per-file cost breakdown table (for directory analysis)",
+    )
+
     args = parser.parse_args()
 
     analyzer = PDFAnalyzer()
+
+    # Set the per-file costs flag on the analyzer instance
+    analyzer._show_per_file_costs = args.per_file_costs
 
     try:
         if args.file:
