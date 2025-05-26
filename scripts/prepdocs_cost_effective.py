@@ -7,9 +7,10 @@ PDFPlumber, and LOCAL EMBEDDINGS instead of Azure Document Intelligence to achie
 70-85% cost savings while maintaining visual citation compatibility.
 
 Now uses intfloat/e5-mistral-7b-instruct for highest quality local embeddings.
+Added SPEED OPTIMIZATIONS with processing modes.
 
 Usage:
-    python scripts/prepdocs_cost_effective.py --input-path data/books/ --index-name cost-effective-books
+    python scripts/prepdocs_cost_effective.py --input-path data/books/ --index-name cost-effective-books --mode speed
 """
 
 import asyncio
@@ -23,8 +24,46 @@ import logging
 from datetime import datetime
 import time
 
+# Memory optimization for MPS (Apple Silicon)
+os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"  # Disable memory limit
+os.environ["TOKENIZERS_PARALLELISM"] = "false"  # Avoid tokenizer warnings
+
 # Add the src directory to the path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "backend"))
+
+# Load environment variables from .env files
+try:
+    from dotenv import load_dotenv
+
+    # Try to load from several potential locations
+    env_loaded = False
+
+    # First try project root .env (if it exists)
+    project_root = Path(__file__).parent.parent
+    root_env = project_root / ".env"
+    if root_env.exists():
+        load_dotenv(root_env)
+        print(f"✅ Loaded environment from {root_env}")
+        env_loaded = True
+
+    # Next try Azure environment .env
+    azure_env = project_root / ".azure" / "my-multimodal-env" / ".env"
+    if azure_env.exists() and not env_loaded:
+        load_dotenv(azure_env)
+        print(f"✅ Loaded environment from {azure_env}")
+        env_loaded = True
+
+    # Finally try backend .env
+    backend_env = project_root / "src" / "backend" / ".env"
+    if backend_env.exists() and not env_loaded:
+        load_dotenv(backend_env)
+        print(f"✅ Loaded environment from {backend_env}")
+        env_loaded = True
+
+    if not env_loaded:
+        print("⚠️ No .env file found. Using existing environment variables.")
+except ImportError:
+    print("⚠️ python-dotenv not installed. Using existing environment variables.")
 
 # Core document processing libraries (cost-effective alternatives)
 try:
@@ -33,9 +72,10 @@ try:
     import pymupdf4llm  # Free LLM-optimized markdown output
     from sentence_transformers import SentenceTransformer  # Local embeddings
     import torch
+    from tqdm import tqdm  # For progress bars
 except ImportError as e:
     print(
-        f"❌ Missing required libraries. Please install: pip install PyMuPDF pdfplumber pymupdf4llm sentence-transformers torch"
+        f"❌ Missing required libraries. Please install: pip install PyMuPDF pdfplumber pymupdf4llm sentence-transformers torch tqdm python-dotenv"
     )
     sys.exit(1)
 
@@ -74,8 +114,14 @@ class CostEffectiveDocumentProcessor:
     - Selective use of GPT-4o Vision only for complex images (future enhancement)
     """
 
-    def __init__(self):
-        """Initialize with Azure environment variables and local embedding model."""
+    def __init__(self, mode="quality"):
+        """
+        Initialize with Azure environment variables and local embedding model.
+
+        Args:
+            mode: "quality" for best results, "speed" for faster processing
+        """
+        self.mode = mode
         # Get Azure configuration from environment (set by azd)
         self.search_endpoint = os.getenv("SEARCH_SERVICE_ENDPOINT")
 
@@ -90,12 +136,35 @@ class CostEffectiveDocumentProcessor:
             endpoint=self.search_endpoint, credential=self.credential
         )
 
-        # Initialize local embedding model
-        logger.info("🤖 Loading local embedding model: intfloat/e5-mistral-7b-instruct")
-        logger.info("📥 This may take a few minutes for first-time download (~14GB)")
+        # Initialize local embedding model based on mode
+        if self.mode == "speed":
+            model_name = "all-MiniLM-L6-v2"  # Faster but lower quality (384 dimensions)
+            logger.info(f"🚀 SPEED MODE: Loading faster model: {model_name}")
+            logger.info("📥 This smaller model is much faster (~80MB)")
+            self.embedding_dimensions = 384
+        else:
+            model_name = (
+                "intfloat/e5-mistral-7b-instruct"  # Highest quality (4096 dimensions)
+            )
+            logger.info(f"🧠 QUALITY MODE: Loading high-quality model: {model_name}")
+            logger.info(
+                "📥 This may take a few minutes for first-time download (~14GB)"
+            )
+            self.embedding_dimensions = 4096
 
-        self.embedding_model = SentenceTransformer("intfloat/e5-mistral-7b-instruct")
-        self.embedding_dimensions = 4096  # e5-mistral-7b-instruct dimensions
+        # Optimize for Apple Silicon if available
+        if torch.backends.mps.is_available():
+            logger.info("🍎 Using Apple Silicon (MPS) acceleration")
+            device = "mps"
+        elif torch.cuda.is_available():
+            logger.info("🎮 Using CUDA GPU acceleration")
+            device = "cuda"
+        else:
+            logger.info("💻 Using CPU for processing")
+            device = "cpu"
+
+        self.device = device
+        self.embedding_model = SentenceTransformer(model_name, device=device)
 
         logger.info(
             f"✅ Local embedding model loaded! Dimensions: {self.embedding_dimensions}"
@@ -128,13 +197,13 @@ class CostEffectiveDocumentProcessor:
         start_time = datetime.now()
 
         logger.info(
-            f"🚀 Starting cost-effective document processing with LOCAL EMBEDDINGS"
+            f"🚀 Starting cost-effective document processing with LOCAL EMBEDDINGS ({self.mode.upper()} MODE)"
         )
         logger.info(f"📁 Input: {input_path}")
         logger.info(f"🔍 Index: {index_name}")
         logger.info(f"⚙️  Strategy: {strategy}")
         logger.info(
-            f"🤖 Embedding model: e5-mistral-7b-instruct ({self.embedding_dimensions}D)"
+            f"🤖 Device: {self.device}, Embedding dimensions: {self.embedding_dimensions}"
         )
 
         # Discover documents
@@ -149,12 +218,12 @@ class CostEffectiveDocumentProcessor:
 
         # Process documents
         all_chunks = []
-        for doc_path in documents:
+        print(f"\n⏳ Processing {len(documents)} documents...")
+        for i, doc_path in enumerate(tqdm(documents, desc="Documents", unit="doc")):
             try:
                 chunks = await self._process_single_document(doc_path, strategy)
                 all_chunks.extend(chunks)
                 self.stats["documents_processed"] += 1
-                logger.info(f"✅ Processed: {doc_path.name}")
             except Exception as e:
                 logger.error(f"❌ Failed to process {doc_path.name}: {e}")
 
@@ -197,8 +266,6 @@ class CostEffectiveDocumentProcessor:
 
         This replaces Azure Document Intelligence with PyMuPDF/PDFPlumber.
         """
-        logger.info(f"📖 Processing: {doc_path.name}")
-
         # Step 1: Extract text and layout using PyMuPDF (FREE vs $1.50/1K pages)
         doc_content = self._extract_content_with_pymupdf(doc_path)
 
@@ -346,8 +413,6 @@ class CostEffectiveDocumentProcessor:
         if not valid_pages:
             return chunks
 
-        logger.info(f"🤖 Generating LOCAL embeddings for {len(valid_pages)} pages...")
-
         # Generate embeddings locally (no API calls!)
         texts = [page["text"] for page in valid_pages]
         embeddings = self._generate_local_embeddings(texts)
@@ -366,6 +431,13 @@ class CostEffectiveDocumentProcessor:
                 .replace("(", "")
                 .replace(")", "")
                 .replace(",", "")
+                .replace("&", "and")  # Replace & with 'and'
+                .replace("'", "")  # Remove apostrophes
+                .replace("+", "plus")  # Replace + with 'plus'
+                .replace(":", "_")  # Replace : with underscore
+                .replace(";", "_")  # Replace ; with underscore
+                .replace("/", "_")  # Replace / with underscore
+                .replace("\\", "_")  # Replace \ with underscore
             )
             chunk = {
                 "id": f"{sanitized_filename}_page_{page_info['page_number']}",
@@ -395,23 +467,70 @@ class CostEffectiveDocumentProcessor:
         return chunks
 
     def _generate_local_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """Generate embeddings using local model - NO API CALLS!"""
+        """Generate embeddings using local model with memory optimization - NO API CALLS!"""
+        import gc
+        import torch
+
         try:
-            logger.info(f"🔄 Processing {len(texts)} texts with local model...")
+            # Choose batch size based on mode
+            if self.mode == "speed":
+                batch_size = 16  # Much larger batch size for speed
+            else:
+                batch_size = 4  # Still larger than original but maintain quality
 
-            # Generate embeddings locally
-            embeddings = self.embedding_model.encode(
-                texts,
-                batch_size=8,  # Adjust based on your RAM
-                show_progress_bar=True,
-                convert_to_numpy=True,
-            )
+            # Process in batches with progress bar
+            all_embeddings = []
+            total_batches = (len(texts) + batch_size - 1) // batch_size
 
-            # Convert to list format for JSON serialization
-            embeddings_list = [embedding.tolist() for embedding in embeddings]
+            # Only show progress bar for larger document sets
+            if len(texts) > 10:
+                batch_iterator = tqdm(
+                    range(0, len(texts), batch_size),
+                    desc="Generating embeddings",
+                    total=total_batches,
+                    unit="batch",
+                )
+            else:
+                batch_iterator = range(0, len(texts), batch_size)
 
-            logger.info(f"✅ Generated {len(embeddings_list)} local embeddings")
-            return embeddings_list
+            for i in batch_iterator:
+                batch_texts = texts[i : i + batch_size]
+
+                try:
+                    # Generate embeddings for this batch with optimized settings
+                    batch_embeddings = self.embedding_model.encode(
+                        batch_texts,
+                        batch_size=len(batch_texts),
+                        show_progress_bar=False,
+                        convert_to_numpy=True,
+                        device=self.device,
+                    )
+
+                    # Convert to list and add to results
+                    batch_embeddings_list = [
+                        embedding.tolist() for embedding in batch_embeddings
+                    ]
+                    all_embeddings.extend(batch_embeddings_list)
+
+                    # Memory cleanup - only do garbage collection every few batches in speed mode
+                    if self.mode != "speed" or i % (batch_size * 4) == 0:
+                        del batch_embeddings
+                        del batch_embeddings_list
+                        gc.collect()
+                        if self.device == "mps":
+                            torch.mps.empty_cache()
+                        elif self.device == "cuda":
+                            torch.cuda.empty_cache()
+
+                except Exception as batch_error:
+                    logger.error(f"Batch embedding failed: {batch_error}")
+                    # Add default embeddings for failed batch
+                    default_batch = [
+                        [0.0] * self.embedding_dimensions for _ in batch_texts
+                    ]
+                    all_embeddings.extend(default_batch)
+
+            return all_embeddings
 
         except Exception as e:
             logger.error(f"❌ Local embedding generation failed: {e}")
@@ -441,7 +560,7 @@ class CostEffectiveDocumentProcessor:
             SearchField(
                 name="text_vector",
                 type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
-                vector_search_dimensions=self.embedding_dimensions,  # 4096 for e5-mistral-7b-instruct
+                vector_search_dimensions=self.embedding_dimensions,
                 vector_search_profile_name="text-vector-profile",
             ),
             SimpleField(name="locationMetadata", type=SearchFieldDataType.String),
@@ -497,17 +616,24 @@ class CostEffectiveDocumentProcessor:
             credential=self.credential,
         )
 
-        # Upload in batches
+        # Upload in batches with progress bar
         batch_size = 100
-        for i in range(0, len(chunks), batch_size):
+        total_batches = (len(chunks) + batch_size - 1) // batch_size
+
+        print(f"\n📤 Uploading {len(chunks)} chunks to search index...")
+        for i in tqdm(
+            range(0, len(chunks), batch_size),
+            desc="Uploading batches",
+            total=total_batches,
+            unit="batch",
+        ):
             batch = chunks[i : i + batch_size]
             try:
                 result = search_client.upload_documents(documents=batch)
-                logger.info(
-                    f"📤 Uploaded batch {i // batch_size + 1}/{(len(chunks) + batch_size - 1) // batch_size}"
-                )
+                if result[0].succeeded is False:
+                    logger.error(f"❌ Upload failed: {result[0].error_message}")
             except Exception as e:
-                logger.error(f"❌ Upload failed for batch {i // batch_size + 1}: {e}")
+                logger.error(f"❌ Upload failed: {e}")
 
     def _generate_report(self) -> Dict[str, Any]:
         """Generate processing report with cost analysis."""
@@ -521,8 +647,10 @@ class CostEffectiveDocumentProcessor:
                 "documents_processed": self.stats["documents_processed"],
                 "total_pages": self.stats["total_pages"],
                 "processing_time_seconds": self.stats["processing_time"],
-                "embedding_model": "intfloat/e5-mistral-7b-instruct",
+                "mode": self.mode,
+                "embedding_model": str(self.embedding_model),
                 "embedding_dimensions": self.embedding_dimensions,
+                "device": self.device,
             },
             "cost_analysis": {
                 "total_cost_usd": self.stats["total_cost"],  # Should be $0!
@@ -544,7 +672,7 @@ class CostEffectiveDocumentProcessor:
                     else 0
                 ),
             },
-            "strategy": "cost_effective_local_processing_with_local_embeddings",
+            "strategy": f"cost_effective_local_processing_{self.mode}_mode",
         }
 
 
@@ -557,9 +685,11 @@ async def main():
 Examples:
   python scripts/prepdocs_cost_effective.py --input-path data/books/ --index-name local-embeddings-books
   python scripts/prepdocs_cost_effective.py --input-path data/reports/report.pdf --index-name local-embeddings-reports --strategy image_heavy
+  python scripts/prepdocs_cost_effective.py --input-path data/books/ --index-name fast-embeddings-books --mode speed
 
-Note: This version uses intfloat/e5-mistral-7b-instruct for local embeddings (4096 dimensions).
-First run will download ~14GB model. Subsequent runs will be much faster.
+Processing Modes:
+  - quality: Uses intfloat/e5-mistral-7b-instruct (4096 dimensions) for best results (default)
+  - speed: Uses all-MiniLM-L6-v2 (384 dimensions) for much faster processing
         """,
     )
 
@@ -573,14 +703,16 @@ First run will download ~14GB model. Subsequent runs will be much faster.
         default="balanced",
         help="Processing strategy",
     )
+    parser.add_argument(
+        "--mode",
+        choices=["quality", "speed"],
+        default="quality",
+        help="Processing mode (quality=best results, speed=faster processing)",
+    )
     args = parser.parse_args()
 
     try:
-        processor = CostEffectiveDocumentProcessor()
-
-        logger.info(
-            "🤖 Using LOCAL embeddings (e5-mistral-7b-instruct) - NO API CALLS!"
-        )
+        processor = CostEffectiveDocumentProcessor(mode=args.mode)
 
         result = await processor.process_documents(
             input_path=args.input_path,
@@ -590,7 +722,9 @@ First run will download ~14GB model. Subsequent runs will be much faster.
 
         # Display results
         print("\n" + "=" * 60)
-        print("🎉 COST-EFFECTIVE PROCESSING WITH LOCAL EMBEDDINGS COMPLETE!")
+        print(
+            f"🎉 COST-EFFECTIVE PROCESSING WITH LOCAL EMBEDDINGS COMPLETE! ({args.mode.upper()} MODE)"
+        )
         print("=" * 60)
 
         summary = result["processing_summary"]
@@ -599,8 +733,8 @@ First run will download ~14GB model. Subsequent runs will be much faster.
         print(f"✅ Documents processed: {summary['documents_processed']}")
         print(f"📄 Total pages: {summary['total_pages']}")
         print(f"⏱️  Processing time: {summary['processing_time_seconds']:.1f} seconds")
-        print(f"🤖 Embedding model: {summary['embedding_model']}")
-        print(f"📐 Embedding dimensions: {summary['embedding_dimensions']}")
+        print(f"💻 Processing device: {summary['device']}")
+        print(f"🤖 Embedding dimensions: {summary['embedding_dimensions']}")
 
         print(f"\n💰 COST ANALYSIS:")
         print(f"💵 Total cost: ${cost_analysis['total_cost_usd']:.4f} (LOCAL = FREE!)")
