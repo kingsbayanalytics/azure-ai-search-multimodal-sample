@@ -189,7 +189,7 @@ You can create an index using the AI Search portal's quick wizard for the multim
         -AzureOpenAiEndpointChatCompletionModelName "gpt-4o"
    ```
 
-   This script will configure the app to use the newly created index.  
+   This script will configure the app to use the newly created index.. 
    **Assumption**: For app simplicity, ensure 'KnowledgeStoreContainerName' and 'DataSourcesContainerName' must be from same storage account.
 - Ensure your Azure Entra ID user object ID has been granted the necessary permissions for all required resources. See [Role Mapping for the Application](#role-mapping-for-the-application) for details.
 - Run:
