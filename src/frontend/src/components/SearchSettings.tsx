@@ -16,6 +16,7 @@ export interface SearchConfig {
     openai_api_mode: OpenAIAPIMode;
     use_streaming: boolean;
     use_knowledge_agent: boolean;
+    use_prompt_flow: boolean;
 }
 
 const SearchSettings: React.FC<Props> = ({ config, setConfig }) => {
@@ -75,6 +76,12 @@ const SearchSettings: React.FC<Props> = ({ config, setConfig }) => {
                 checked={config.use_streaming}
                 onChange={(_, data: SwitchOnChangeData) => handleSwitchChange("use_streaming", data.checked)}
                 label={"Use Streaming Response"}
+            />
+            <Switch
+                id="usePromptFlowSwitch"
+                checked={config.use_prompt_flow}
+                onChange={(_, data: SwitchOnChangeData) => handleSwitchChange("use_prompt_flow", data.checked)}
+                label={<InfoLabel label={"Use Prompt Flow"} info={<>Invoke Prompt Flow for response generation</>} />}
             />
         </div>
     );
