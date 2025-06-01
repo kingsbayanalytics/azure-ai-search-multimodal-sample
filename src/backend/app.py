@@ -22,6 +22,7 @@ from constants import USER_AGENT
 from multimodalrag import MultimodalRag
 from data_model import DocumentPerChunkDataModel
 from citation_file_handler import CitationFilesHandler
+from prompt_flow_client import PromptFlowClient
 
 # Load environment variables from .env file
 load_dotenv()
@@ -109,6 +110,8 @@ async def create_app():
         os.environ["ARTIFACTS_STORAGE_CONTAINER"]
     )
 
+    prompt_flow_client = PromptFlowClient()
+
     app = web.Application(middlewares=[])
 
     mmrag = MultimodalRag(
@@ -117,6 +120,7 @@ async def create_app():
         openai_client,
         chatcompletions_model_name,
         artifacts_container_client,
+        prompt_flow_client,
     )
     mmrag.attach_to_app(app, "/chat")
 

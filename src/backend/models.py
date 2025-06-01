@@ -10,6 +10,7 @@ class SearchConfig(TypedDict):
     use_semantic_ranker: bool = False
     use_streaming: bool = False
     use_knowledge_agent: bool = False
+    use_prompt_flow: bool = False
 
 
 class SearchRequestParameters(TypedDict):

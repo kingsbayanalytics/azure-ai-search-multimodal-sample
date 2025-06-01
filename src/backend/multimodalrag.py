@@ -13,6 +13,7 @@ from helpers import get_blob_as_base64
 from search_grounding import SearchGroundingRetriever
 from rag_base import RagBase
 from data_model import DataModel
+from prompt_flow_client import PromptFlowClient
 from prompts import (
     SYSTEM_PROMPT_NO_META_DATA,
 )
@@ -32,10 +33,12 @@ class MultimodalRag(RagBase):
         openai_client: AsyncAzureOpenAI,
         chatcompletions_model_name: str,
         container_client: ContainerClient,
+        prompt_flow_client: PromptFlowClient = None,
     ):
         super().__init__(
             openai_client,
             chatcompletions_model_name,
+            prompt_flow_client,
         )
         self.container_client = container_client
         self.blob_service_client = container_client._get_blob_service_client()

@@ -3,6 +3,7 @@ import json
 import os
 import time
 from typing import List
+from prompt_flow_client import PromptFlowClient
 import uuid
 from abc import ABC, abstractmethod
 from enum import Enum
@@ -36,9 +37,11 @@ class RagBase(ABC):
         self,
         openai_client: AsyncAzureOpenAI,
         chatcompletions_model_name: str,
+        prompt_flow_client: PromptFlowClient = None,
     ):
         self.openai_client = openai_client
         self.chatcompletions_model_name = chatcompletions_model_name
+        self.prompt_flow_client = prompt_flow_client
 
     async def _handle_request(self, request: web.Request):
         request_params = await request.json()
@@ -51,6 +54,7 @@ class RagBase(ABC):
             use_semantic_ranker=config_dict.get("use_semantic_ranker", False),
             use_streaming=config_dict.get("use_streaming", False),
             use_knowledge_agent=config_dict.get("use_knowledge_agent", False),
+            use_prompt_flow=config_dict.get("use_prompt_flow", False),
         )
         request_id = request_params.get("request_id", str(int(time.time())))
         response = await self._create_stream_response(request)
@@ -97,7 +101,18 @@ class RagBase(ABC):
 
         complete_response: dict = {}
 
-        if search_config.get("use_streaming", False):
+        if search_config.get("use_prompt_flow", False):
+            logger.info("Calling Prompt Flow endpoint")
+            if not self.prompt_flow_client:
+                raise RuntimeError("Prompt Flow client is not configured")
+            pf_response = await self.prompt_flow_client.run_flow(messages)
+            msg_id = str(uuid.uuid4())
+            await self._send_answer_message(
+                request_id, response, msg_id, pf_response.get("answer", "")
+            )
+            complete_response = pf_response
+
+        elif search_config.get("use_streaming", False):
             logger.info("Streaming chat completion")
             chat_stream_response = instructor.from_openai(
                 self.openai_client,
