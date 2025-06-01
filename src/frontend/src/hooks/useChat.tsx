@@ -47,6 +47,7 @@ export default function useChat(config: SearchConfig) {
                 chatThread,
                 config,
                 message => {
+                    console.log("SSE Message received:", message);
                     if (message.event === "processing_step") {
                         setProcessingStepsMessage(steps => {
                             const newStep = JSON.parse(message.data);
@@ -55,10 +56,12 @@ export default function useChat(config: SearchConfig) {
                             return updatedSteps;
                         });
                     } else if (message.event === "[END]") {
+                        console.log("Received END message, setting loading to false");
                         setIsLoading(false);
                     } else {
                         const data = JSON.parse(message.data);
                         data.type = message.event;
+                        console.log("Processing message data:", data);
 
                         setThread(prevThread => {
                             const index = prevThread.findIndex(msg => msg.message_id === data.message_id);
@@ -66,6 +69,7 @@ export default function useChat(config: SearchConfig) {
                             if (index !== -1) newThread[index] = data;
 
                             newThread.sort((a, b) => new Date(a.request_id).getTime() - new Date(b.request_id).getTime());
+                            console.log("Updated thread:", newThread);
                             refreshChats();
 
                             return newThread;

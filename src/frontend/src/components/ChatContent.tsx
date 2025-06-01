@@ -41,6 +41,9 @@ const ChatContent: React.FC<Props> = ({ thread, processingStepMsg }) => {
         }, {})
     );
 
+    console.log("Thread messages:", thread);
+    console.log("Messages grouped by request ID:", messagesGroupedByRequestId);
+
     // Recognize citations within square brackets, e.g. ["anystring"]
     const citationRegex = /\[([^\]]+)\]/g;
     const citationHit = (index: number, docId: string) => {
@@ -59,9 +62,7 @@ const ChatContent: React.FC<Props> = ({ thread, processingStepMsg }) => {
     const renderWithCitations = (children: React.ReactNode) => {
         return React.Children.map(children, child => {
             if (typeof child === "string") {
-                return child
-                    .split(citationRegex)
-                    .map((part, index) => (index % 2 === 0 ? part : index % 2 === 1 ? citationHit(index, part) : null));
+                return child.split(citationRegex).map((part, index) => (index % 2 === 0 ? part : index % 2 === 1 ? citationHit(index, part) : null));
             }
             return child;
         });

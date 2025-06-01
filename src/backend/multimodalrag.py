@@ -60,43 +60,66 @@ class MultimodalRag(RagBase):
             ProcessingStep(title="Search config", type="code", content=search_config),
         )
 
-        try:
-            await self._send_processing_step_message(
-                request_id,
-                response,
-                ProcessingStep(
-                    title="Grounding the user message",
-                    type="code",
-                    content={"user_message": user_message, "chat_thread": chat_thread},
-                ),
+        # Skip grounding when using Prompt Flow - it has its own search capability
+        if search_config.get("use_prompt_flow", False):
+            logger.info("Using Prompt Flow - skipping local grounding")
+
+            # Prepare simple messages for Prompt Flow
+            messages = [
+                {
+                    "role": "system",
+                    "content": [{"text": SYSTEM_PROMPT_NO_META_DATA, "type": "text"}],
+                },
+                *chat_thread,
+                {"role": "user", "content": [{"text": user_message, "type": "text"}]},
+            ]
+
+            # Create empty grounding results to satisfy the interface
+            grounding_results = {"references": [], "search_queries": []}
+            grounding_retriever = None
+
+        else:
+            # Perform local grounding as normal
+            try:
+                await self._send_processing_step_message(
+                    request_id,
+                    response,
+                    ProcessingStep(
+                        title="Grounding the user message",
+                        type="code",
+                        content={
+                            "user_message": user_message,
+                            "chat_thread": chat_thread,
+                        },
+                    ),
+                )
+
+                grounding_retriever = self._get_grounding_retriever(search_config)
+
+                grounding_results = await grounding_retriever.retrieve(
+                    user_message, chat_thread, search_config
+                )
+
+                await self._send_processing_step_message(
+                    request_id,
+                    response,
+                    ProcessingStep(
+                        title="Grounding results received",
+                        type="code",
+                        description=f"Retrieved {len(grounding_results['references'])} results.",
+                        content=grounding_results,
+                    ),
+                )
+
+            except Exception as e:
+                await self._send_error_message(
+                    request_id, response, "Grounding failed: " + str(e)
+                )
+                return
+
+            messages = await self.prepare_llm_messages(
+                grounding_results, chat_thread, user_message
             )
-
-            grounding_retriever = self._get_grounding_retriever(search_config)
-
-            grounding_results = await grounding_retriever.retrieve(
-                user_message, chat_thread, search_config
-            )
-
-            await self._send_processing_step_message(
-                request_id,
-                response,
-                ProcessingStep(
-                    title="Grounding results received",
-                    type="code",
-                    description=f"Retrieved {len(grounding_results['references'])} results.",
-                    content=grounding_results,
-                ),
-            )
-
-        except Exception as e:
-            await self._send_error_message(
-                request_id, response, "Grounding failed: " + str(e)
-            )
-            return
-
-        messages = await self.prepare_llm_messages(
-            grounding_results, chat_thread, user_message
-        )
 
         await self._formulate_response(
             request_id,
