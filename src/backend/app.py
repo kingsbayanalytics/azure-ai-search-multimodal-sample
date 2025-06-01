@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
 from aiohttp import web
@@ -7,6 +8,7 @@ from rich.logging import RichHandler
 from openai import AsyncAzureOpenAI
 from azure.identity.aio import (
     DefaultAzureCredential,
+    AzureCliCredential,
     get_bearer_token_provider,
 )
 from azure.search.documents.aio import SearchClient
@@ -43,7 +45,8 @@ async def list_indexes(index_client: SearchIndexClient):
 
 
 async def create_app():
-    tokenCredential = DefaultAzureCredential()
+    tokenCredential = AzureCliCredential()
+
     tokenProvider = get_bearer_token_provider(
         tokenCredential,
         "https://cognitiveservices.azure.com/.default",
@@ -143,7 +146,54 @@ async def create_app():
     return app
 
 
+async def test_token_acquisition():
+    print(
+        "\n\n********************************************************************************"
+    )
+    print("--- STARTING DIRECT TOKEN ACQUISITION TEST FOR AZURE SEARCH ---")
+    print(
+        "********************************************************************************\n"
+    )
+    sys.stdout.flush()
+    logging.info(
+        "--- Attempting direct token acquisition for Azure Search (logging) ---"
+    )
+    try:
+        credential = AzureCliCredential()
+        token = await credential.get_token("https://search.azure.com/.default")
+        print(
+            f"--- Successfully retrieved Azure Search token. Token: {token.token[:20]}... (truncated), Expires on: {token.expires_on} ---"
+        )
+        logging.info(
+            f"--- Successfully retrieved Azure Search token. Expires on: {token.expires_on} (logging) ---"
+        )
+    except Exception as e:
+        print(f"--- FAILED to retrieve Azure Search token directly: {e} ---")
+        logging.error(
+            f"--- Failed to retrieve Azure Search token directly: {e} (logging) ---",
+            exc_info=True,
+        )
+        import traceback
+
+        traceback.print_exc(file=sys.stdout)
+    finally:
+        print(
+            "\n********************************************************************************"
+        )
+        print("--- DIRECT TOKEN ACQUISITION TEST FINISHED ---")
+        print(
+            "********************************************************************************\n"
+        )
+        sys.stdout.flush()
+        sys.exit(1)
+
+
 if __name__ == "__main__":
+    # Run the test before starting the app
+    import asyncio
+
+    # asyncio.run(test_token_acquisition()) # Temporarily comment out to run the full app
+
     host = os.environ.get("HOST", "localhost")
     port = int(os.environ.get("PORT", 5000))
     web.run_app(create_app(), host=host, port=port)

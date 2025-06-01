@@ -39,12 +39,12 @@ class KnowledgeAgentGrounding(GroundingRetriever):
         self.data_model = data_model
         self.index_name = index_name
 
-        self._create_retrieval_agent(
-            agent_name,
-            azure_openai_endpoint,
-            azure_openai_searchagent_deployment,
-            azure_openai_searchagent_model,
-        )
+        # self._create_retrieval_agent(
+        #     agent_name,
+        #     azure_openai_endpoint,
+        #     azure_openai_searchagent_deployment,
+        #     azure_openai_searchagent_model,
+        # )
 
     def _create_retrieval_agent(
         self,
