@@ -105,12 +105,47 @@ class RagBase(ABC):
             logger.info("Calling Prompt Flow endpoint")
             if not self.prompt_flow_client:
                 raise RuntimeError("Prompt Flow client is not configured")
-            pf_response = await self.prompt_flow_client.run_flow(messages)
-            msg_id = str(uuid.uuid4())
-            await self._send_answer_message(
-                request_id, response, msg_id, pf_response.get("answer", "")
+
+            raw_pf_response = await self.prompt_flow_client.run_flow(messages)
+            await self._send_processing_step_message(
+                request_id,
+                response,
+                ProcessingStep(
+                    title="Raw Prompt Flow Response",
+                    type="code",
+                    content=raw_pf_response,
+                ),
             )
-            complete_response = pf_response
+
+            msg_id = str(uuid.uuid4())
+
+            # Adapt to the new Prompt Flow output structure
+            final_answer = raw_pf_response.get("output", {}).get("output", "")
+            await self._send_answer_message(request_id, response, msg_id, final_answer)
+
+            # Extract citation IDs from the new structure
+            text_citation_ids_from_pf = []
+            image_citation_ids_from_pf = (
+                []
+            )  # Assuming we might differentiate later or all are text for now
+
+            pf_citations = raw_pf_response.get("output", {}).get("citations", [])
+            for citation_obj in pf_citations:
+                citation_id = citation_obj.get("id")
+                if citation_id:
+                    # For now, let's assume all citations from this flow are text-based.
+                    # If you have a way to distinguish image citations (e.g., by 'filepath' extension or a dedicated type field),
+                    # you would add logic here to populate image_citation_ids_from_pf accordingly.
+                    # Example: if ".png" in citation_obj.get("filepath","").lower() or ".jpg" in citation_obj.get("filepath","").lower():
+                    # image_citation_ids_from_pf.append(citation_id)
+                    # else:
+                    text_citation_ids_from_pf.append(citation_id)
+
+            complete_response = {
+                "answer": final_answer,
+                "text_citations": text_citation_ids_from_pf,
+                "image_citations": image_citation_ids_from_pf,  # Or handle as per your logic
+            }
 
         elif search_config.get("use_streaming", False):
             logger.info("Streaming chat completion")
