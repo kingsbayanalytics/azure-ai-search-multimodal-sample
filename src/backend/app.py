@@ -11,6 +11,7 @@ from azure.identity.aio import (
     AzureCliCredential,
     get_bearer_token_provider,
 )
+from azure.core.credentials import AzureKeyCredential
 from azure.search.documents.aio import SearchClient
 from azure.search.documents.indexes.aio import SearchIndexClient
 from azure.search.documents.agent.aio import KnowledgeAgentRetrievalClient
@@ -45,10 +46,19 @@ async def list_indexes(index_client: SearchIndexClient):
 
 
 async def create_app():
-    tokenCredential = AzureCliCredential()
+    # Credential for Azure AD authenticated services (OpenAI, Storage, etc.)
+    azure_ad_credential = AzureCliCredential()
 
-    tokenProvider = get_bearer_token_provider(
-        tokenCredential,
+    # API Key for Azure AI Search
+    search_service_key = os.getenv("SEARCH_SERVICE_KEY")
+    if not search_service_key:
+        logging.error("SEARCH_SERVICE_KEY environment variable not set.")
+        raise ValueError("SEARCH_SERVICE_KEY environment variable not set.")
+    search_api_key_credential = AzureKeyCredential(search_service_key)
+
+    # Token provider for Azure OpenAI (assuming it uses Azure AD)
+    openai_token_provider = get_bearer_token_provider(
+        azure_ad_credential,
         "https://cognitiveservices.azure.com/.default",
     )
 
@@ -62,21 +72,21 @@ async def create_app():
     search_client = SearchClient(
         endpoint=search_endpoint,
         index_name=search_index_name,
-        credential=tokenCredential,
+        credential=search_api_key_credential,
         user_agent_policy=UserAgentPolicy(base_user_agent=USER_AGENT),
     )
     data_model = DocumentPerChunkDataModel()
 
     index_client = SearchIndexClient(
         endpoint=search_endpoint,
-        credential=tokenCredential,
+        credential=search_api_key_credential,
         user_agent_policy=UserAgentPolicy(base_user_agent=USER_AGENT),
     )
 
     ka_retrieval_client = KnowledgeAgentRetrievalClient(
         agent_name=knowledge_agent_name,
         endpoint=search_endpoint,
-        credential=tokenCredential,
+        credential=search_api_key_credential,
     )
 
     knowledge_agent = KnowledgeAgentGrounding(
@@ -92,7 +102,7 @@ async def create_app():
     )
 
     openai_client = AsyncAzureOpenAI(
-        azure_ad_token_provider=tokenProvider,
+        azure_ad_token_provider=openai_token_provider,
         api_version="2024-08-01-preview",
         azure_endpoint=openai_endpoint,
         timeout=30,
@@ -107,7 +117,7 @@ async def create_app():
 
     blob_service_client = BlobServiceClient(
         account_url=os.environ["ARTIFACTS_STORAGE_ACCOUNT_URL"],
-        credential=tokenCredential,
+        credential=azure_ad_credential,
     )
     artifacts_container_client = blob_service_client.get_container_client(
         os.environ["ARTIFACTS_STORAGE_CONTAINER"]
@@ -137,63 +147,66 @@ async def create_app():
             web.get(
                 "/", lambda _: web.FileResponse(current_directory / "static/index.html")
             ),
-            web.get("/list_indexes", lambda _: list_indexes(index_client)),
+            web.get("/list_indexes", lambda req: list_indexes(index_client)),
             web.post("/get_citation_doc", citation_files_handler.handle),
         ]
+    )
+    app.router.add_static(
+        "/assets", path=current_directory / "static/assets", name="assets"
     )
     app.router.add_static("/", path=current_directory / "static", name="static")
 
     return app
 
 
-async def test_token_acquisition():
-    print(
-        "\n\n********************************************************************************"
-    )
-    print("--- STARTING DIRECT TOKEN ACQUISITION TEST FOR AZURE SEARCH ---")
-    print(
-        "********************************************************************************\n"
-    )
-    sys.stdout.flush()
-    logging.info(
-        "--- Attempting direct token acquisition for Azure Search (logging) ---"
-    )
-    try:
-        credential = AzureCliCredential()
-        token = await credential.get_token("https://search.azure.com/.default")
-        print(
-            f"--- Successfully retrieved Azure Search token. Token: {token.token[:20]}... (truncated), Expires on: {token.expires_on} ---"
-        )
-        logging.info(
-            f"--- Successfully retrieved Azure Search token. Expires on: {token.expires_on} (logging) ---"
-        )
-    except Exception as e:
-        print(f"--- FAILED to retrieve Azure Search token directly: {e} ---")
-        logging.error(
-            f"--- Failed to retrieve Azure Search token directly: {e} (logging) ---",
-            exc_info=True,
-        )
-        import traceback
-
-        traceback.print_exc(file=sys.stdout)
-    finally:
-        print(
-            "\n********************************************************************************"
-        )
-        print("--- DIRECT TOKEN ACQUISITION TEST FINISHED ---")
-        print(
-            "********************************************************************************\n"
-        )
-        sys.stdout.flush()
-        sys.exit(1)
+# Test token acquisition (can be removed or adapted if not needed for key-based auth)
+# async def test_token_acquisition():
+#     print(
+#         "\n\n********************************************************************************"
+#     )
+#     print("--- STARTING DIRECT TOKEN ACQUISITION TEST FOR AZURE SEARCH ---")
+#     print(
+#         "********************************************************************************\n"
+#     )
+#     sys.stdout.flush()
+#     logging.info(
+#         "--- Attempting direct token acquisition for Azure Search (logging) ---"
+#     )
+#     try:
+#         credential = AzureCliCredential()
+#         token = await credential.get_token("https://search.azure.com/.default")
+#         print(
+#             f"--- Successfully retrieved Azure Search token. Token: {token.token[:20]}... (truncated), Expires on: {token.expires_on} ---"
+#         )
+#         logging.info(
+#             f"--- Successfully retrieved Azure Search token. Expires on: {token.expires_on} (logging) ---"
+#         )
+#     except Exception as e:
+#         print(f"--- FAILED to retrieve Azure Search token directly: {e} ---")
+#         logging.error(
+#             f"--- Failed to retrieve Azure Search token directly: {e} (logging) ---",
+#             exc_info=True,
+#         )
+#         import traceback
+#
+#         traceback.print_exc(file=sys.stdout)
+#     finally:
+#         print(
+#             "\n********************************************************************************"
+#         )
+#         print("--- DIRECT TOKEN ACQUISITION TEST FINISHED ---")
+#         print(
+#             "********************************************************************************\n"
+#         )
+#         sys.stdout.flush()
+#         sys.exit(1)
 
 
 if __name__ == "__main__":
-    # Run the test before starting the app
-    import asyncio
-
-    # asyncio.run(test_token_acquisition()) # Temporarily comment out to run the full app
+    # import asyncio
+    # asyncio.run(test_token_acquisition()) # Ensure this is commented out
 
     host = os.environ.get("HOST", "localhost")
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", "8000"))
+    logging.info(f"======== Running on http://{host}:{port} ========")
     web.run_app(create_app(), host=host, port=port)
