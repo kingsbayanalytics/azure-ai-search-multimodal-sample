@@ -1,0 +1,10 @@
+[
+  {
+    "inputs": {
+      "chat_input": "tell me about creativity"
+    },
+    "outputs": {
+      "output": "I don't know."
+    }
+  }
+]

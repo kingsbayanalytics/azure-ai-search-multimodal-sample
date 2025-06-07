@@ -84,13 +84,14 @@ async def check_prompt_flow():
         url = f"{endpoint}/flows/{flow_name}:run"
         logger.info(f"Constructed run URL: {url}")
 
+    # Check for environment variables that specify field names
+    request_field_name = os.getenv("PROMPTFLOW_REQUEST_FIELD_NAME", "question")
+
     payload = {
-        "messages": [
-            {"role": "user", "content": "Hello Prompt Flow! This is a test message."}
-        ]
-        # Add other inputs your flow might expect, e.g.:
-        # "chat_history": [],
-        # "config": { "param_name": "param_value" }
+        "inputs": {
+            request_field_name: "Hello Prompt Flow! This is a test message.",
+            "chat_history": [],
+        }
     }
 
     logger.info(f"Attempting to call Prompt Flow...")
@@ -99,6 +100,7 @@ async def check_prompt_flow():
         f"API Key: {'*' * (len(api_key) - 4) + api_key[-4:] if api_key else 'Not Set'}"
     )  # Mask API key
     logger.info(f"Flow Name: {flow_name}")
+    logger.info(f"Using request field name: {request_field_name}")
     logger.info(f"Payload: {json.dumps(payload, indent=2)}")
 
     async with aiohttp.ClientSession() as session:

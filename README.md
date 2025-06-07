@@ -245,7 +245,7 @@ NOTE: It may take 5-10 minutes after you see 'SUCCESS' for the application to be
 
 ### Debug app locally
 - You need to ***provision all the resources*** before your start to debug app locally
-- To launch the app locally, run the below command. The website will open automatically and be served at [localhost:5000](http://localhost:5000).
+- To launch the app locally, run the below command. The website will open automatically and be served at [localhost:5001](http://localhost:5001).
 
 - **On Windows:**
    ```powershell

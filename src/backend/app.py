@@ -29,13 +29,29 @@ from prompt_flow_client import PromptFlowClient
 
 # Load environment variables from .env file
 load_dotenv()
+# Try to load from .azure directory if exists
+if os.path.exists(".azure/my-multimodal-env/.env"):
+    load_dotenv(".azure/my-multimodal-env/.env")
+
+# Set PromptFlow field names directly
+os.environ["PROMPTFLOW_REQUEST_FIELD_NAME"] = "question"
+os.environ["PROMPTFLOW_RESPONSE_FIELD_NAME"] = "output"
+os.environ["PROMPTFLOW_CITATIONS_FIELD_NAME"] = "citations"
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Change to DEBUG for more verbose logging
     format="%(message)s",
     datefmt="[%X]",
     handlers=[RichHandler(rich_tracebacks=True)],
 )
+
+# Make sure all loggers are set to debug level
+for name in logging.root.manager.loggerDict:
+    logging.getLogger(name).setLevel(logging.DEBUG)
+
+# Get logger for app
+logger = logging.getLogger("app")
+logger.setLevel(logging.DEBUG)
 
 
 async def list_indexes(index_client: SearchIndexClient):
@@ -49,44 +65,71 @@ async def create_app():
     # Credential for Azure AD authenticated services (OpenAI, Storage, etc.)
     azure_ad_credential = AzureCliCredential()
 
-    # API Key for Azure AI Search
-    search_service_key = os.getenv("SEARCH_SERVICE_KEY")
-    if not search_service_key:
-        logging.error("SEARCH_SERVICE_KEY environment variable not set.")
-        raise ValueError("SEARCH_SERVICE_KEY environment variable not set.")
-    search_api_key_credential = AzureKeyCredential(search_service_key)
-
-    # Token provider for Azure OpenAI (assuming it uses Azure AD)
-    openai_token_provider = get_bearer_token_provider(
-        azure_ad_credential,
-        "https://cognitiveservices.azure.com/.default",
+    # Configure Azure OpenAI
+    openai_endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
+    # Look for model and deployment names with fallbacks
+    openai_deployment_name = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
+    chatcompletions_model_name = os.environ.get(
+        "AZURE_OPENAI_MODEL_NAME", openai_deployment_name
     )
 
-    chatcompletions_model_name = os.environ["AZURE_OPENAI_MODEL_NAME"]
-    openai_endpoint = os.environ["AZURE_OPENAI_ENDPOINT"]
-    search_endpoint = os.environ["SEARCH_SERVICE_ENDPOINT"]
-    search_index_name = os.environ["SEARCH_INDEX_NAME"]
-    knowledge_agent_name = os.environ["KNOWLEDGE_AGENT_NAME"]
-    openai_deployment_name = os.environ["AZURE_OPENAI_DEPLOYMENT"]
+    # Log OpenAI configuration
+    logging.info(f"Using OpenAI endpoint: {openai_endpoint}")
+    logging.info(f"Using OpenAI deployment: {openai_deployment_name}")
+    logging.info(f"Using OpenAI model: {chatcompletions_model_name}")
+
+    # Support token-based auth for OpenAI
+    openai_token_provider = get_bearer_token_provider(
+        azure_ad_credential, "https://cognitiveservices.azure.com/.default"
+    )
+
+    # Determine authentication method for AI Search
+    use_key_auth = (
+        "SEARCH_SERVICE_KEY" in os.environ and os.environ["SEARCH_SERVICE_KEY"]
+    )
+
+    # Configure Azure AI Search credentials
+    if use_key_auth:
+        # Use API key authentication
+        search_credential = AzureKeyCredential(os.environ["SEARCH_SERVICE_KEY"])
+    else:
+        # Use Azure AD authentication
+        search_credential = azure_ad_credential
+
+    # Get Search service endpoint and index name
+    search_endpoint = os.environ.get("SEARCH_SERVICE_ENDPOINT")
+    search_index_name = os.environ.get(
+        "SEARCH_INDEX_NAME", "adaption-innovation-course-mats-index"
+    )
+
+    # Log the actual search index being used
+    logging.info(f"Using search endpoint: {search_endpoint}")
+    logging.info(f"Using search index: {search_index_name}")
 
     search_client = SearchClient(
         endpoint=search_endpoint,
         index_name=search_index_name,
-        credential=search_api_key_credential,
-        user_agent_policy=UserAgentPolicy(base_user_agent=USER_AGENT),
+        credential=search_credential,
+        user_agent=USER_AGENT,
     )
-    data_model = DocumentPerChunkDataModel()
 
     index_client = SearchIndexClient(
         endpoint=search_endpoint,
-        credential=search_api_key_credential,
-        user_agent_policy=UserAgentPolicy(base_user_agent=USER_AGENT),
+        credential=search_credential,
+        user_agent=USER_AGENT,
     )
 
+    data_model = DocumentPerChunkDataModel()
+
+    # Azure AI Search Knowledge Agent configuration
+    knowledge_agent_name = os.environ.get("KNOWLEDGE_AGENT_NAME", "default-agent")
+    search_service_name = search_endpoint.split("https://")[1].split(".")[0]
+
+    # Setup Knowledge Agent Client
     ka_retrieval_client = KnowledgeAgentRetrievalClient(
-        agent_name=knowledge_agent_name,
         endpoint=search_endpoint,
-        credential=search_api_key_credential,
+        credential=search_credential,
+        agent_name=knowledge_agent_name,
     )
 
     knowledge_agent = KnowledgeAgentGrounding(
@@ -115,12 +158,16 @@ async def create_app():
         chatcompletions_model_name,
     )
 
+    # Configure storage - using defaults if not found
     blob_service_client = BlobServiceClient(
-        account_url=os.environ["ARTIFACTS_STORAGE_ACCOUNT_URL"],
+        account_url=os.environ.get(
+            "ARTIFACTS_STORAGE_ACCOUNT_URL",
+            "https://storageaccount.blob.core.windows.net",
+        ),
         credential=azure_ad_credential,
     )
     artifacts_container_client = blob_service_client.get_container_client(
-        os.environ["ARTIFACTS_STORAGE_CONTAINER"]
+        os.environ.get("ARTIFACTS_STORAGE_CONTAINER", "documents")
     )
 
     prompt_flow_client = PromptFlowClient()
@@ -207,6 +254,6 @@ if __name__ == "__main__":
     # asyncio.run(test_token_acquisition()) # Ensure this is commented out
 
     host = os.environ.get("HOST", "localhost")
-    port = int(os.environ.get("PORT", "8000"))
+    port = int(os.environ.get("PORT", 5000))
     logging.info(f"======== Running on http://{host}:{port} ========")
     web.run_app(create_app(), host=host, port=port)

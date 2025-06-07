@@ -22,169 +22,138 @@ class PromptFlowClient:
     ) -> None:
         self.endpoint = endpoint or os.getenv("PROMPT_FLOW_ENDPOINT")
         self.flow_name = flow_name or os.getenv("PROMPT_FLOW_FLOW_NAME")
+        self.use_prompt_flow = (
+            use_prompt_flow
+            if use_prompt_flow is not None
+            else os.getenv("USE_PROMPT_FLOW", "false").lower() == "true"
+        )
+        self.credential = credential
         self.api_key = api_key or os.getenv("PROMPT_FLOW_API_KEY")
 
-        if use_prompt_flow is None:
-            use_prompt_flow_env = os.getenv("USE_PROMPT_FLOW", "false")
-            self.use_prompt_flow = str(use_prompt_flow_env).lower() in (
-                "1",
-                "true",
-                "yes",
-            )
-        else:
-            self.use_prompt_flow = use_prompt_flow
+        # Field name customization through environment variables
+        self.request_field_name = os.getenv(
+            "PROMPTFLOW_REQUEST_FIELD_NAME", "chat_input"
+        )
+        self.response_field_name = os.getenv("PROMPTFLOW_RESPONSE_FIELD_NAME", "output")
+        self.citations_field_name = os.getenv(
+            "PROMPTFLOW_CITATIONS_FIELD_NAME", "citations"
+        )
 
-        if not self.api_key:
-            self.credential = credential or DefaultAzureCredential()
-            self.scope = "https://ml.azure.com/.default"
-        else:
-            self.credential = None
+        logger.info(f"PromptFlow Client initialized with endpoint: {self.endpoint}")
+        logger.info(f"PromptFlow Client initialized with flow name: {self.flow_name}")
+        logger.info(
+            f"PromptFlow Client initialized with use_prompt_flow: {self.use_prompt_flow}"
+        )
+        logger.info(f"Using request field name: {self.request_field_name}")
+        logger.info(f"Using response field name: {self.response_field_name}")
+        logger.info(f"Using citations field name: {self.citations_field_name}")
 
-    async def run_flow(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Run the configured Prompt Flow with the provided messages."""
-        if not self.use_prompt_flow:
-            raise RuntimeError(
-                "Prompt Flow usage is not enabled via USE_PROMPT_FLOW environment variable."
-            )
-        if not self.endpoint or not self.flow_name:
-            raise ValueError(
-                "PROMPT_FLOW_ENDPOINT and PROMPT_FLOW_FLOW_NAME must be set in environment variables."
-            )
+    def is_enabled(self) -> bool:
+        """Check if the Prompt Flow client is enabled."""
+        return self.use_prompt_flow and bool(self.endpoint)
 
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    async def get_token(self) -> str:
+        """Get an authorization token using the DefaultAzureCredential."""
+        if not self.credential:
+            self.credential = DefaultAzureCredential()
 
-        if self.api_key:
-            logger.info("Using API key for Prompt Flow authentication.")
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        elif self.credential:
-            logger.info("Using Azure AD token for Prompt Flow authentication.")
-            try:
-                token = await self.credential.get_token(self.scope)
-                headers["Authorization"] = f"Bearer {token.token}"
-            except Exception as e:
-                logger.error(f"Failed to get Azure AD token: {e}")
-                raise RuntimeError(f"Failed to get Azure AD token for Prompt Flow: {e}")
-        else:
-            raise RuntimeError(
-                "Prompt Flow authentication not configured: API key (PROMPT_FLOW_API_KEY) or Azure AD credentials must be available."
-            )
+        token = await self.credential.get_token("https://ml.azure.com/.default")
+        return token.token
 
-        url = f"{self.endpoint}/flows/{self.flow_name}:run"
+    def create_payload(
+        self, query: str, history: List[Dict[str, str]]
+    ) -> Dict[str, Any]:
+        """Create the payload for the Prompt Flow endpoint."""
+        request_field = self.request_field_name
 
-        if self.api_key:
-            if not self.endpoint.endswith("/score"):
-                logger.warning(
-                    f"PROMPT_FLOW_ENDPOINT ('{self.endpoint}') does not end with '/score'. For key-based auth, it usually should be the full scoring URL."
-                )
-            url = self.endpoint
-        else:
-            url = f"{self.endpoint}/flows/{self.flow_name}:run"
+        logger.info(f"Creating payload with request field name: {request_field}")
+        logger.info(f"Query: {query[:100]}...")
+        logger.info(f"History: {json.dumps(history[:2], indent=2)}")
 
-        logger.info("Calling Prompt Flow at %s", url)
-
-        # Reconstruct payload for Prompt Flow
-        # Assuming the 'messages' list from MultimodalRAG is structured like:
-        # [system_message, user_q1, assistant_a1, ..., current_user_question, document_context_message]
-
-        if len(messages) < 1:  # Should at least have the current user question
-            logger.error(
-                "Messages list is too short to extract question for Prompt Flow."
-            )
-            raise ValueError("Cannot extract question from messages for Prompt Flow.")
-
-        # The actual user question is the second to last if docs are appended as the last message.
-        # If no docs, it's the last one.
-        # For simplicity, let's assume the prompt flow doesn't want the big doc context directly.
-        # It should use the question to do its own RAG.
-
-        # Try to find the last actual user question (not the document dump)
-        actual_question_content = ""
-        chat_history_for_pf = []
-
-        # The 'messages' list from MultimodalRAG has:
-        # System prompt
-        # Chat history (alternating user/assistant)
-        # Current user question (text)
-        # Document context (also as a user message, but structured)
-
-        # Let's find the last message that is a simple text query from the user.
-        # The message containing documents is also role:user but its content is a list of dicts.
-        # The actual user question's content is a list with one dict: [{"text": "...", "type": "text"}]
-
-        # Default to the last message if it's a simple user text query
-        if (
-            messages
-            and messages[-1].get("role") == "user"
-            and isinstance(messages[-1].get("content"), list)
-            and len(messages[-1].get("content")) == 1
-            and messages[-1]["content"][0].get("type") == "text"
-        ):
-            actual_question_content = messages[-1]["content"][0]["text"]
-            chat_history_for_pf = messages[:-1]
-        elif (
-            len(messages) > 1
-            and messages[-2].get("role") == "user"
-            and isinstance(messages[-2].get("content"), list)
-            and len(messages[-2].get("content")) == 1
-            and messages[-2]["content"][0].get("type") == "text"
-        ):
-            # This assumes the last message is the document context block
-            actual_question_content = messages[-2]["content"][0]["text"]
-            chat_history_for_pf = messages[:-2]  # Exclude question and doc context
-        else:
-            logger.warning(
-                "Could not reliably determine the user's question from the messages structure for Prompt Flow. Sending all as history and an empty question."
-            )
-            actual_question_content = ""  # Fallback
-            chat_history_for_pf = messages  # Send everything as history
-
-        # Convert chat_history_for_pf to the {"role": ..., "content": ...} format if needed,
-        # or the {"inputs": ..., "outputs": ...} format.
-        # The check_promptflow.py script used an empty chat_history.
-        # For now, let's pass an empty history, similar to the test script, and just the question.
-        # This simplifies things and relies on the Prompt Flow to manage its own history/context if designed for it.
-
-        simple_chat_history = []
-        for msg in chat_history_for_pf:
-            role = msg.get("role")
-            content_list = msg.get("content")
-            if (
-                role
-                and isinstance(content_list, list)
-                and content_list
-                and isinstance(content_list[0], dict)
-                and "text" in content_list[0]
-            ):
-                simple_chat_history.append(
-                    {"role": role, "content": content_list[0]["text"]}
-                )
-            # else, skip complex messages like image urls or the doc block for simple history
-
+        # Create a payload using the custom field name
         payload = {
             "inputs": {
-                "question": actual_question_content,
-                "chat_history": simple_chat_history,  # Or [] if the flow doesn't use it or expects a different format
+                request_field: query,
+                "chat_history": history,
             }
         }
-        # Override config can be added here if needed:
-        # "config_override": { ... }
 
-        logger.info(f"Prompt Flow Request URL: {url}")
+        logger.info(f"Final payload: {json.dumps(payload, indent=2)}")
+        return payload
+
+    async def call_endpoint(
+        self, query: str, history: List[Dict[str, str]] = None
+    ) -> Dict[str, Any]:
+        """Call the Prompt Flow endpoint with the given query."""
+        if not self.endpoint or not self.api_key:
+            logger.error("Prompt Flow endpoint or API key not set")
+            return {"error": "Prompt Flow endpoint or API key not set"}
+
+        if history is None:
+            history = []
+
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+
+        # Use the create_payload method to build the payload
+        payload = self.create_payload(query, history)
+
+        logger.info(f"Calling Prompt Flow endpoint: {self.endpoint}")
+        logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
+
+        # For key-based auth, the endpoint might already be the full scoring URL
+        # or it might need /flows/{flow_name}:run appended.
+        if (
+            self.endpoint and "/score" in self.endpoint.lower()
+        ):  # Check if it's a managed online endpoint scoring URI
+            url = self.endpoint
+            logger.info(f"Using direct scoring URL: {url}")
+        elif (
+            self.endpoint and self.flow_name
+        ):  # Assume it's a base AML endpoint, append flow name
+            url = f"{self.endpoint}/flows/{self.flow_name}:run"
+            logger.info(f"Constructed run URL: {url}")
+        else:
+            logger.error("Invalid Prompt Flow endpoint configuration")
+            return {"error": "Invalid Prompt Flow endpoint configuration"}
+
         try:
-            logger.info(
-                f"Prompt Flow Request Payload:\n{json.dumps(payload, indent=2)}"
-            )
-        except TypeError as e:
-            logger.warning(
-                f"Could not serialize payload for logging: {e}. Payload: {payload}"
-            )
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, headers=headers) as resp:
-                if resp.status != 200:
-                    error_content = await resp.text()
-                    logger.error(
-                        f"Prompt Flow request failed with status {resp.status}: {error_content}"
-                    )
+            async with aiohttp.ClientSession() as session:
+                logger.info(
+                    f"Sending request to {url} with payload: {json.dumps(payload)}"
+                )
+                async with session.post(url, json=payload, headers=headers) as resp:
+                    logger.info(f"Response status: {resp.status}")
                     resp.raise_for_status()
-                return await resp.json()
+
+                    # Get response text first to log it
+                    response_text = await resp.text()
+                    logger.info(f"Raw response text: {response_text}")
+
+                    # Parse to JSON and return
+                    try:
+                        response_json = json.loads(response_text)
+                        logger.info(
+                            f"Parsed response JSON: {json.dumps(response_json, indent=2)}"
+                        )
+                        return response_json
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse response as JSON: {e}")
+                        return {
+                            "error": f"Failed to parse response as JSON: {e}",
+                            "raw_response": response_text,
+                        }
+        except aiohttp.ClientConnectorError as e:
+            logger.error(f"Connection Error: Failed to connect to {url}. Details: {e}")
+            return {
+                "error": f"Connection Error: Failed to connect to {url}. Details: {e}"
+            }
+        except aiohttp.ClientResponseError as e:
+            logger.error(f"Response Error: {e.status} {e.message}")
+            return {"error": f"Response Error: {e.status} {e.message}"}
+        except Exception as e:
+            logger.error(f"An unexpected error occurred: {e}", exc_info=True)
+            return {"error": f"An unexpected error occurred: {e}"}

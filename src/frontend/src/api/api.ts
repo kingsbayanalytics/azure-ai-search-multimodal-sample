@@ -1,6 +1,6 @@
 import { EventSourceMessage, fetchEventSource } from "@microsoft/fetch-event-source";
 
-import { SearchConfig } from "../components/SearchSettings";
+import { SearchConfig } from "../hooks/useConfig";
 
 const sendChatApi = async (
     message: string,

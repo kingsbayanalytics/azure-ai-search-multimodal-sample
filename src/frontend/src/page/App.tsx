@@ -14,7 +14,7 @@ import { IntroTitle } from "../api/defaults";
 import { useState } from "react";
 
 function App() {
-    const { config, setConfig, indexes } = useConfig();
+    const { config, indexes } = useConfig();
     const { thread, processingStepsMessage, chats, isLoading, handleQuery, onNewChat } = useChat(config);
     const { darkMode, setDarkMode } = useTheme();
     const [newQ, setnewQ] = useState(false);
@@ -27,7 +27,7 @@ function App() {
                 <div className="content-wrapper">
                     {thread.length || newQ ? (
                         <>
-                            <NavBar config={config} indexes={indexes} setConfig={setConfig} onNewChat={onNewChat} chats={Object.values(chats || {})} />
+                            <NavBar indexes={indexes} onNewChat={onNewChat} chats={Object.values(chats || {})} />
 
                             <div className="content">
                                 {thread.length ? <ChatContent thread={thread} processingStepMsg={processingStepsMessage} /> : <></>}

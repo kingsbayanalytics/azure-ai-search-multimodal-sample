@@ -2,7 +2,7 @@ import logging
 import json
 import os
 import time
-from typing import List
+from typing import List, Dict, Any, Optional
 from prompt_flow_client import PromptFlowClient
 import uuid
 from abc import ABC, abstractmethod
@@ -18,8 +18,34 @@ from models import (
     GroundingResults,
 )
 from processing_step import ProcessingStep
+from typing_extensions import TypedDict
 
-logger = logging.getLogger("rag")
+logger = logging.getLogger("multimodal-rag")
+
+
+# Type definitions
+class GroundingResults(TypedDict, total=False):
+    """Results from the grounding retriever."""
+
+    passages: List[Dict[str, Any]]
+    images: List[Dict[str, Any]]
+    references: List[Dict[str, Any]]
+    search_queries: List[str]
+
+
+class SearchConfig(TypedDict, total=False):
+    """Configuration for the search."""
+
+    query: str
+    use_prompt_flow: bool
+
+
+class ProcessingStep(TypedDict):
+    """A step in the processing pipeline."""
+
+    title: str
+    type: str
+    content: Any
 
 
 class MessageType(Enum):
@@ -49,12 +75,7 @@ class RagBase(ABC):
         chat_thread = request_params.get("chatThread", [])
         config_dict = request_params.get("config", {})
         search_config = SearchConfig(
-            chunk_count=config_dict.get("chunk_count", 10),
             openai_api_mode=config_dict.get("openai_api_mode", "chat_completions"),
-            use_semantic_ranker=config_dict.get("use_semantic_ranker", False),
-            use_streaming=config_dict.get("use_streaming", False),
-            use_knowledge_agent=config_dict.get("use_knowledge_agent", False),
-            use_prompt_flow=config_dict.get("use_prompt_flow", False),
         )
         request_id = request_params.get("request_id", str(int(time.time())))
         response = await self._create_stream_response(request)
@@ -89,206 +110,87 @@ class RagBase(ABC):
         grounding_retriever: GroundingRetriever,
         grounding_results: GroundingResults,
         search_config: SearchConfig,
-    ):
-        """Handles streaming chat completion and sends citations."""
-
-        logger.info("Formulating LLM response")
-        await self._send_processing_step_message(
-            request_id,
-            response,
-            ProcessingStep(title="LLM Payload", type="code", content=messages),
-        )
-
-        complete_response: dict = {}
-
-        if search_config.get("use_prompt_flow", False):
-            logger.info("Calling Prompt Flow endpoint")
-            if not self.prompt_flow_client:
-                raise RuntimeError("Prompt Flow client is not configured")
-
-            raw_pf_response_data = await self.prompt_flow_client.run_flow(messages)
-
-            # Ensure raw_pf_response_data is a dictionary
-            parsed_pf_response = None
-            if isinstance(raw_pf_response_data, str):
-                try:
-                    parsed_pf_response = json.loads(raw_pf_response_data)
-                    logger.info(
-                        f"Successfully parsed raw_pf_response_data string into dict."
-                    )
-                except json.JSONDecodeError as e:
-                    logger.error(
-                        f"Failed to parse raw_pf_response_data string as JSON: {e}. Data: {raw_pf_response_data}"
-                    )
-                    parsed_pf_response = {
-                        "output": {
-                            "output": f"Error: Could not parse Prompt Flow response JSON: {e}"
-                        }
-                    }  # Set error
-            elif isinstance(raw_pf_response_data, dict):
-                parsed_pf_response = raw_pf_response_data
-            else:
-                logger.error(
-                    f"Unexpected type for raw_pf_response_data: {type(raw_pf_response_data)}. Data: {raw_pf_response_data}"
-                )
-                parsed_pf_response = {
-                    "output": {"output": "Error: Unexpected Prompt Flow response type."}
-                }  # Set error
-
-            # Add direct logging of the raw response to the console
-            try:
-                logger.info(
-                    f"Raw Prompt Flow Response received (rag_base.py, after potential parse):\n{json.dumps(parsed_pf_response, indent=2)}"
-                )
-                logger.info(f"Type of parsed_pf_response: {type(parsed_pf_response)}")
-
-                # Debug: Log all top-level keys in the response
-                if isinstance(parsed_pf_response, dict):
-                    logger.info(
-                        f"Top-level keys in parsed_pf_response: {list(parsed_pf_response.keys())}"
-                    )
-
-                    # Check different possible response structures
-                    if "output" in parsed_pf_response:
-                        output_dict = parsed_pf_response.get("output")
-                        logger.info(
-                            f'Type of parsed_pf_response.get("output"): {type(output_dict)}'
-                        )
-                        logger.info(
-                            f'Value of parsed_pf_response.get("output"): {output_dict}'
-                        )
-
-                    # Check if the response might be directly at the top level
-                    if (
-                        "id" in parsed_pf_response
-                        and "output" not in parsed_pf_response
-                    ):
-                        logger.info(
-                            "Response appears to have id at top level - checking for direct structure"
-                        )
-                        if "citations" in parsed_pf_response:
-                            logger.info("Found citations at top level")
-
-                    # Check for error responses
-                    if "error" in parsed_pf_response:
-                        logger.error(
-                            f"Prompt Flow returned an error: {parsed_pf_response.get('error')}"
-                        )
-
-            except TypeError as e:
-                logger.warning(
-                    f"Could not serialize parsed_pf_response for logging: {e}. Response: {parsed_pf_response}"
-                )
-
-            await self._send_processing_step_message(
-                request_id,
-                response,
-                ProcessingStep(
-                    title="Parsed Prompt Flow Response",  # Changed title
-                    type="code",
-                    content=parsed_pf_response,  # Log parsed version
-                ),
-            )
-
+        msg_id: str = None,
+        parsed_pf_response: Any = None,
+    ) -> None:
+        """Formulate a response to send back to the client based on the response from the model."""
+        if msg_id is None:
             msg_id = str(uuid.uuid4())
 
+        if parsed_pf_response is not None:
             # Adapt to the new Prompt Flow output structure, using parsed_pf_response
             final_answer = ""
             pf_citations = []
 
-            if isinstance(parsed_pf_response, dict):
-                # Check for nested output structure (expected format)
-                if "output" in parsed_pf_response and isinstance(
-                    parsed_pf_response["output"], dict
-                ):
-                    output_level1 = parsed_pf_response["output"]
-                    final_answer = output_level1.get("output", "")
-                    pf_citations = output_level1.get("citations", [])
-                    logger.info("Found answer in nested output structure")
-
-                # Check for chat_output structure (another common format)
-                elif "chat_output" in parsed_pf_response:
-                    chat_output = parsed_pf_response["chat_output"]
-                    if isinstance(chat_output, str):
-                        final_answer = chat_output
-                        logger.info("Found answer in chat_output as string")
-                    elif isinstance(chat_output, dict):
-                        # Check if chat_output has nested structure
-                        final_answer = chat_output.get(
-                            "output", chat_output.get("answer", str(chat_output))
-                        )
-                        pf_citations = chat_output.get("citations", [])
-                        logger.info("Found answer in chat_output as dict")
-                    pf_citations = parsed_pf_response.get("citations", [])
-
-                # Check for direct structure (output at top level)
-                elif "output" in parsed_pf_response and isinstance(
-                    parsed_pf_response["output"], str
-                ):
-                    final_answer = parsed_pf_response["output"]
-                    pf_citations = parsed_pf_response.get("citations", [])
-                    logger.info("Found answer in direct output structure")
-
-                # Check for response with id at top level (another possible format)
-                elif "id" in parsed_pf_response and not "output" in parsed_pf_response:
-                    # The actual output might be in a different key
-                    for key in ["answer", "response", "result", "text"]:
-                        if key in parsed_pf_response:
-                            final_answer = parsed_pf_response[key]
-                            logger.info(f"Found answer in '{key}' field")
-                            break
-                    pf_citations = parsed_pf_response.get("citations", [])
-
-                # Check for error response
-                elif "error" in parsed_pf_response:
-                    final_answer = (
-                        f"Error from Prompt Flow: {parsed_pf_response['error']}"
-                    )
-                    logger.error(f"Prompt Flow error response: {parsed_pf_response}")
-
-                # Fallback for unexpected structure
-                else:
-                    logger.error(
-                        f"Unexpected Prompt Flow response structure. Keys: {list(parsed_pf_response.keys())}"
-                    )
-                    final_answer = (
-                        "Error: Unable to parse Prompt Flow response structure"
-                    )
-
-            else:
-                final_answer = "Error: parsed_pf_response is not a dict"
-                logger.error(
-                    f"parsed_pf_response is not a dict: {type(parsed_pf_response)}"
-                )
+            # Get response and citations field names from the PromptFlow client
+            response_field = self.prompt_flow_client.response_field_name
+            citations_field = self.prompt_flow_client.citations_field_name
 
             logger.info(
-                f"Extracted final_answer from Prompt Flow (rag_base.py): '{final_answer}'"
+                f"Looking for response in field '{response_field}' and citations in field '{citations_field}'"
             )
 
-            # Convert Prompt Flow citations to the format expected by the frontend
+            # The response structure from PromptFlow is:
+            # {
+            #   "chat_output": {
+            #     "citations": [...],
+            #     "output": "Answer text"
+            #   }
+            # }
+            if "chat_output" in parsed_pf_response and isinstance(
+                parsed_pf_response["chat_output"], dict
+            ):
+                chat_output = parsed_pf_response["chat_output"]
+                logger.info(
+                    f"Found chat_output structure with keys: {list(chat_output.keys())}"
+                )
+
+                # Extract the answer
+                if response_field in chat_output:
+                    final_answer = chat_output[response_field]
+                    logger.info(f"Found response in chat_output.{response_field}")
+                else:
+                    logger.warning(
+                        f"Could not find response field '{response_field}' in chat_output, available fields: {list(chat_output.keys())}"
+                    )
+
+                # Extract citations
+                if citations_field in chat_output:
+                    pf_citations = chat_output[citations_field]
+                    logger.info(
+                        f"Found {len(pf_citations)} citations in chat_output.{citations_field}"
+                    )
+                else:
+                    logger.warning(
+                        f"Could not find citations field '{citations_field}' in chat_output"
+                    )
+            else:
+                logger.warning(
+                    f"Could not find expected chat_output structure in PromptFlow response. Keys: {list(parsed_pf_response.keys())}"
+                )
+
+                # Try to find the response in the top level
+                if response_field in parsed_pf_response:
+                    final_answer = parsed_pf_response[response_field]
+                    logger.info(f"Found response in top-level {response_field} field")
+
+            # Convert PromptFlow citations to the format expected by the frontend
             text_citations = []
             image_citations = []
 
-            for citation_obj in pf_citations:
-                # Extract relevant fields from the citation
-                citation = {
-                    "id": citation_obj.get("id", ""),
-                    "title": citation_obj.get("title", ""),
-                    "filepath": citation_obj.get("filepath", ""),
-                    "url": citation_obj.get("url", ""),
-                    "content": citation_obj.get("content", ""),
-                    "chunk_id": citation_obj.get("chunk_id"),
-                    "reindex_id": citation_obj.get("reindex_id"),
-                }
-
-                # Determine if it's an image or text citation based on filepath
-                filepath = citation_obj.get("filepath", "").lower()
-                if any(
-                    ext in filepath for ext in [".png", ".jpg", ".jpeg", ".gif", ".bmp"]
-                ):
-                    image_citations.append(citation)
-                else:
-                    text_citations.append(citation)
+            for citation in pf_citations:
+                try:
+                    # Check if this is a valid citation
+                    if isinstance(citation, dict) and "content" in citation:
+                        citation_item = {
+                            "content": citation.get("content", ""),
+                            "title": citation.get("title", ""),
+                            "filepath": citation.get("filepath", ""),
+                            "url": citation.get("url", ""),
+                        }
+                        text_citations.append(citation_item)
+                except Exception as e:
+                    logger.error(f"Error processing citation: {e}", exc_info=True)
 
             # Send answer message with type "answer" and include citations
             await self._send_answer_message(
@@ -303,55 +205,42 @@ class RagBase(ABC):
             # Don't call _extract_and_send_citations when using prompt flow
             return
 
-        elif search_config.get("use_streaming", False):
-            logger.info("Streaming chat completion")
-            chat_stream_response = instructor.from_openai(
-                self.openai_client,
-            ).chat.completions.create_partial(
-                stream=True,
-                model=self.chatcompletions_model_name,
-                response_model=AnswerFormat,
-                messages=messages,
-            )
-            msg_id = str(uuid.uuid4())
+        # Handle non-PromptFlow responses
+        complete_response = {}
 
-            async for stream_response in chat_stream_response:
-                if stream_response.answer is not None:
-                    await self._send_answer_message(
-                        request_id, response, msg_id, stream_response.answer
-                    )
-                    complete_response = stream_response.model_dump()
-            if len(complete_response.keys()) == 0:
-                raise ValueError("No response received from chat completion stream.")
-
-        else:
-            logger.info("Waiting for chat completion")
-            chat_completion = await instructor.from_openai(
-                self.openai_client,
-            ).chat.completions.create(
-                stream=False,
-                model=self.chatcompletions_model_name,
-                response_model=AnswerFormat,
-                messages=messages,
-            )
-            msg_id = str(uuid.uuid4())
-
-            if chat_completion is not None:
-                await self._send_answer_message(
-                    request_id, response, msg_id, chat_completion.answer
-                )
-                complete_response = chat_completion.model_dump()
-            else:
-                raise ValueError("No response received from chat completion stream.")
-
-        await self._extract_and_send_citations(
-            request_id,
-            response,
-            grounding_retriever,
-            grounding_results["references"],
-            complete_response["text_citations"] or [],
-            complete_response["image_citations"] or [],
+        logger.info("Streaming chat completion")
+        chat_stream_response = instructor.from_openai(
+            self.openai_client,
+        ).chat.completions.create_partial(
+            stream=True,
+            model=self.chatcompletions_model_name,
+            response_model=AnswerFormat,
+            messages=messages,
         )
+
+        async for stream_response in chat_stream_response:
+            if stream_response.answer is not None:
+                await self._send_answer_message(
+                    request_id, response, msg_id, stream_response.answer
+                )
+                complete_response = stream_response.model_dump()
+        if len(complete_response.keys()) == 0:
+            raise ValueError("No response received from chat completion stream.")
+
+        # Extract citations if we have any
+        if (
+            grounding_retriever
+            and "text_citations" in complete_response
+            and "image_citations" in complete_response
+        ):
+            await self._extract_and_send_citations(
+                request_id,
+                response,
+                grounding_retriever,
+                grounding_results.get("references", []),
+                complete_response.get("text_citations") or [],
+                complete_response.get("image_citations") or [],
+            )
 
     async def _extract_and_send_citations(
         self,
@@ -444,15 +333,31 @@ class RagBase(ABC):
         logger.info(
             f"Sending processing step message for step: {processing_step.title}"
         )
-        await self._send_message(
-            response,
-            MessageType.ProcessingStep.value,
-            {
-                "request_id": request_id,
-                "message_id": str(uuid.uuid4()),
-                "processingStep": processing_step.to_dict(),
-            },
-        )
+
+        # Convert the processing step to a dictionary
+        step_dict = processing_step.to_dict()
+
+        # Log the full content for debugging
+        try:
+            content_str = json.dumps(step_dict["content"], indent=2)
+            logger.info(f"Processing step content (truncated): {content_str[:1000]}")
+            logger.info(f"Content type: {type(step_dict['content'])}")
+
+            if step_dict["title"] == "Prompt Flow Response":
+                logger.info("Found Prompt Flow Response step")
+                logger.info(f"Full content length: {len(content_str)}")
+        except (TypeError, KeyError) as e:
+            logger.error(f"Error serializing processing step content: {e}")
+
+        # Create the message
+        message = {
+            "request_id": request_id,
+            "message_id": str(uuid.uuid4()),
+            "processingStep": step_dict,
+        }
+
+        # Send the message
+        await self._send_message(response, MessageType.ProcessingStep.value, message)
 
     async def _send_answer_message(
         self,
@@ -501,17 +406,37 @@ class RagBase(ABC):
 
     async def _send_message(self, response, event, data):
         try:
-            message_to_send = f"event:{event}\ndata: {json.dumps(data)}\n\n"
+            message_json = json.dumps(data)
+            message_size = len(message_json)
+
+            # Log message details
             logger.info(
-                f"Attempting to send SSE message (rag_base.py _send_message):\n{message_to_send.strip()}"
+                f"Sending SSE message type: {event}, size: {message_size} bytes"
             )
+
+            # Log truncated message for debugging
+            if message_size > 1000:
+                logger.info(
+                    f"Message content (truncated): {message_json[:500]}...{message_json[-500:]}"
+                )
+            else:
+                logger.info(f"Message content: {message_json}")
+
+            message_to_send = f"event:{event}\ndata: {message_json}\n\n"
+
+            # Log the actual message being sent
+            logger.info(
+                f"Attempting to send SSE message (rag_base.py _send_message), size: {len(message_to_send)} bytes"
+            )
+
             await response.write(message_to_send.encode("utf-8"))
+            logger.info(f"Successfully sent message of type {event}")
         except ConnectionResetError:
             # TODO: Something is wrong here, the messages attempted and failed here is not what the UI sees, thats another set of stream...
             # logger.warning("Connection reset by client.")
             pass
         except Exception as e:
-            logger.error(f"Error sending message: {e}")
+            logger.error(f"Error sending message: {e}", exc_info=True)
 
     async def _send_end(self, response):
         await self._send_message(response, MessageType.END.value, {})
@@ -519,3 +444,141 @@ class RagBase(ABC):
     def attach_to_app(self, app, path):
         """Attaches the handler to the web app."""
         app.router.add_post(path, self._handle_request)
+
+    async def _process_message(
+        self,
+        request_id: str,
+        response: web.StreamResponse,
+        messages: list,
+        grounding_retriever: GroundingRetriever,
+        grounding_results: GroundingResults,
+        search_config: SearchConfig,
+    ):
+        """Handles streaming chat completion and sends citations."""
+
+        logger.info("Formulating LLM response")
+        await self._send_processing_step_message(
+            request_id,
+            response,
+            ProcessingStep(title="LLM Payload", type="code", content=messages),
+        )
+
+        msg_id = str(uuid.uuid4())
+
+        if search_config.get("use_prompt_flow", False):
+            logger.info("Calling Prompt Flow endpoint")
+            if not self.prompt_flow_client:
+                raise RuntimeError("Prompt Flow client is not configured")
+
+            # Extract the user's query from the messages
+            user_query = ""
+            for message in reversed(messages):
+                if message.get("role") == "user" and isinstance(
+                    message.get("content"), list
+                ):
+                    for content_item in message.get("content", []):
+                        if content_item.get("type") == "text":
+                            user_query = content_item.get("text", "")
+                            break
+                    if user_query:
+                        break
+
+            # Create a simplified chat history for the PromptFlow endpoint
+            chat_history = []
+            for i in range(0, len(messages) - 1, 2):
+                if i + 1 < len(messages):
+                    user_msg = messages[i]
+                    assistant_msg = messages[i + 1]
+
+                    user_content = ""
+                    assistant_content = ""
+
+                    # Extract user content
+                    if user_msg.get("role") == "user" and isinstance(
+                        user_msg.get("content"), list
+                    ):
+                        for content_item in user_msg.get("content", []):
+                            if content_item.get("type") == "text":
+                                user_content = content_item.get("text", "")
+                                break
+
+                    # Extract assistant content
+                    if assistant_msg.get("role") == "assistant" and isinstance(
+                        assistant_msg.get("content"), list
+                    ):
+                        for content_item in assistant_msg.get("content", []):
+                            if content_item.get("type") == "text":
+                                assistant_content = content_item.get("text", "")
+                                break
+
+                    if user_content and assistant_content:
+                        chat_history.append({"role": "user", "content": user_content})
+                        chat_history.append(
+                            {"role": "assistant", "content": assistant_content}
+                        )
+
+            # Call the PromptFlow endpoint with the extracted query and history
+            raw_pf_response = await self.prompt_flow_client.call_endpoint(
+                user_query, chat_history
+            )
+
+            # Ensure raw_pf_response is a dictionary
+            parsed_pf_response = None
+            if isinstance(raw_pf_response, str):
+                try:
+                    parsed_pf_response = json.loads(raw_pf_response)
+                    logger.info(
+                        f"Successfully parsed raw_pf_response string into dict."
+                    )
+                except json.JSONDecodeError as e:
+                    logger.error(
+                        f"Failed to parse raw_pf_response string as JSON: {e}. Data: {raw_pf_response}"
+                    )
+                    parsed_pf_response = {
+                        "error": f"Error: Could not parse Prompt Flow response JSON: {e}"
+                    }
+            elif isinstance(raw_pf_response, dict):
+                parsed_pf_response = raw_pf_response
+            else:
+                logger.error(
+                    f"Unexpected type for raw_pf_response: {type(raw_pf_response)}. Data: {raw_pf_response}"
+                )
+                parsed_pf_response = {
+                    "error": "Error: Unexpected Prompt Flow response type."
+                }
+
+            # Log the response for debugging
+            try:
+                logger.info(
+                    f"PromptFlow Response:\n{json.dumps(parsed_pf_response, indent=2)}"
+                )
+            except TypeError as e:
+                logger.warning(
+                    f"Could not serialize parsed_pf_response for logging: {e}"
+                )
+
+            # Send processing step message with the parsed response
+            await self._send_processing_step_message(
+                request_id,
+                response,
+                ProcessingStep(
+                    title="Prompt Flow Response",
+                    type="code",
+                    content=parsed_pf_response,
+                ),
+            )
+
+            # Process the response and send it to the client
+            await self._formulate_response(
+                request_id,
+                response,
+                messages,
+                grounding_retriever,
+                grounding_results,
+                search_config,
+                msg_id,
+                parsed_pf_response,
+            )
+            return
+
+        # If not using PromptFlow, continue with the existing code...

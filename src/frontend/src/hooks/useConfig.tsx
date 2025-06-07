@@ -1,16 +1,16 @@
 import { useEffect, useState } from "react";
 import { listIndexes } from "../api/api";
 import { OpenAIAPIMode } from "../api/models";
-import { SearchConfig } from "../components/SearchSettings";
+
+export interface SearchConfig {
+    openai_api_mode: OpenAIAPIMode;
+}
 
 export default function useConfig() {
     const [config, setConfig] = useState<SearchConfig>({
-        use_semantic_ranker: false,
-        chunk_count: 10,
-        openai_api_mode: OpenAIAPIMode.ChatCompletions,
-        use_streaming: true,
-        use_knowledge_agent: false,
-        use_prompt_flow: false
+        openai_api_mode: OpenAIAPIMode.ChatCompletions
+        // use_streaming: true, // Removed, always true
+        // use_prompt_flow: true // Removed, always true
     });
 
     const [indexes, setIndexes] = useState<string[]>([]);

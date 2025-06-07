@@ -61,65 +61,21 @@ class MultimodalRag(RagBase):
         )
 
         # Skip grounding when using Prompt Flow - it has its own search capability
-        if search_config.get("use_prompt_flow", False):
-            logger.info("Using Prompt Flow - skipping local grounding")
+        logger.info("Using Prompt Flow - skipping local grounding")
 
-            # Prepare simple messages for Prompt Flow
-            messages = [
-                {
-                    "role": "system",
-                    "content": [{"text": SYSTEM_PROMPT_NO_META_DATA, "type": "text"}],
-                },
-                *chat_thread,
-                {"role": "user", "content": [{"text": user_message, "type": "text"}]},
-            ]
+        # Prepare simple messages for Prompt Flow
+        messages = [
+            {
+                "role": "system",
+                "content": [{"text": SYSTEM_PROMPT_NO_META_DATA, "type": "text"}],
+            },
+            *chat_thread,
+            {"role": "user", "content": [{"text": user_message, "type": "text"}]},
+        ]
 
-            # Create empty grounding results to satisfy the interface
-            grounding_results = {"references": [], "search_queries": []}
-            grounding_retriever = None
-
-        else:
-            # Perform local grounding as normal
-            try:
-                await self._send_processing_step_message(
-                    request_id,
-                    response,
-                    ProcessingStep(
-                        title="Grounding the user message",
-                        type="code",
-                        content={
-                            "user_message": user_message,
-                            "chat_thread": chat_thread,
-                        },
-                    ),
-                )
-
-                grounding_retriever = self._get_grounding_retriever(search_config)
-
-                grounding_results = await grounding_retriever.retrieve(
-                    user_message, chat_thread, search_config
-                )
-
-                await self._send_processing_step_message(
-                    request_id,
-                    response,
-                    ProcessingStep(
-                        title="Grounding results received",
-                        type="code",
-                        description=f"Retrieved {len(grounding_results['references'])} results.",
-                        content=grounding_results,
-                    ),
-                )
-
-            except Exception as e:
-                await self._send_error_message(
-                    request_id, response, "Grounding failed: " + str(e)
-                )
-                return
-
-            messages = await self.prepare_llm_messages(
-                grounding_results, chat_thread, user_message
-            )
+        # Create empty grounding results to satisfy the interface
+        grounding_results = {"references": [], "search_queries": []}
+        grounding_retriever = None
 
         await self._formulate_response(
             request_id,
@@ -131,12 +87,15 @@ class MultimodalRag(RagBase):
         )
 
     def _get_grounding_retriever(self, search_config) -> GroundingRetriever:
-        if search_config["use_knowledge_agent"]:
-            logger.info("Using knowledge agent for grounding")
-            return self.knowledge_agent
-        else:
-            logger.info("Using search index for grounding")
-            return self.search_grounding
+        # Since local grounding is removed, this method is not expected to be called.
+        # However, to prevent errors if it is, we can default to search_grounding or raise an error.
+        # For now, let's assume it won't be called due to the changes in _process_request.
+        logger.warning(
+            "_get_grounding_retriever was called, but local grounding should be disabled."
+        )
+        return (
+            self.search_grounding
+        )  # or raise NotImplementedError("Local grounding is disabled")
 
     async def prepare_llm_messages(
         self,

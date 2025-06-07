@@ -31,6 +31,10 @@ foreach ($key in $azdEnv.PSObject.Properties.Name) {
     [System.Environment]::SetEnvironmentVariable($key, $azdEnv.$key, [System.EnvironmentVariableTarget]::Process)
 }
 
+# Set PORT to 5001 to avoid conflicts with Control Center
+[System.Environment]::SetEnvironmentVariable("PORT", "5001", [System.EnvironmentVariableTarget]::Process)
+Write-Host "Setting application to use PORT=5001"
+
 Write-Host ""
 Write-Host "Restoring frontend npm packages"
 Write-Host ""
@@ -54,7 +58,7 @@ Write-Host ""
 Write-Host "Starting app"
 Write-Host ""
 Set-Location $backendPath
-Start-Process http://localhost:5000
+Start-Process http://localhost:5001
 Start-Process -FilePath $venvPythonPath -ArgumentList "app.py" -Wait -NoNewWindow
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Failed to start backend"

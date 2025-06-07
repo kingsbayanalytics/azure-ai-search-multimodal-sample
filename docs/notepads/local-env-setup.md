@@ -118,7 +118,7 @@ AZURE_RESOURCE_GROUP=your-resource-group-name
 
 # Optional App Configuration
 HOST=localhost
-PORT=5000
+PORT=5001
 ```
 
 ## Troubleshooting

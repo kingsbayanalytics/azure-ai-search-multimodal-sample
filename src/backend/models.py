@@ -5,12 +5,9 @@ from pydantic import BaseModel
 class SearchConfig(TypedDict):
     """Configuration for search parameters."""
 
-    chunk_count: int = 10
     openai_api_mode: Literal["chat_completions"] = "chat_completions"
-    use_semantic_ranker: bool = False
-    use_streaming: bool = False
-    use_knowledge_agent: bool = False
-    use_prompt_flow: bool = False
+    # use_streaming: bool = False # Removed, always true
+    # use_prompt_flow: bool = True # Removed, always true
 
 
 class SearchRequestParameters(TypedDict):

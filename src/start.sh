@@ -27,6 +27,15 @@ fi
 # Parse and export each environment variable in the current shell session
 eval $(echo "$azdEnv" | jq -r 'to_entries | .[] | "export \(.key)=\(.value)"')
 
+# Set PORT to 5001 to avoid conflicts with Control Center
+export PORT=5001
+echo "Setting application to use PORT=$PORT"
+
+echo 'Cleaning up frontend artifacts'
+rm -rf $frontendPath/node_modules
+rm -rf $frontendPath/dist # Also remove the build output directory for good measure
+# Vite's default cache is node_modules/.vite, which is covered by removing node_modules
+
 echo 'Restore and build frontend'
 cd $frontendPath
 npm install
@@ -36,7 +45,8 @@ echo 'Build and start backend'
 cd $root
 
 echo 'Creating Python virtual environment'
-python3 -m venv .venv
+rm -rf .venv # Also ensure the backend venv is fully clean
+python3.11 -m venv .venv
 
 echo 'Installing dependencies from "requirements.txt" into virtual environment (in quiet mode)...'
 .venv/bin/python -m pip --quiet --disable-pip-version-check install -r src/backend/requirements.txt
